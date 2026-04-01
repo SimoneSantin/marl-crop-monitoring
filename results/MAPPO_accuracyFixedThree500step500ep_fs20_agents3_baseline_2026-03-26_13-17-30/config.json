@@ -1,0 +1,27 @@
+{
+    "algorithm": "MAPPO",
+    "experiment_name": "accuracyFixedThree500step500ep",
+    "env": {
+        "field_size": 20,
+        "num_agents": 3,
+        "max_steps": 500
+    },
+    "reward": {
+        "type": "baseline",
+        "formula": "reward = new_cells * 0.5 - 0.01*collisions - 2.0 + alignment*0.5 + abs(accuracy) *500; +10.0 if coverage > 0.95",
+        "new_cell_weight": 0.5,
+        "collision_weight": 2.0,
+        "step_penalty": 0.01,
+        "alignment_weight": 0.5,
+        "completion_bonus": 10.0,
+        "completion_threshold": 0.95,
+        "accuracy_weight": 500.0
+    },
+    "training": {
+        "num_episodes": 500,
+        "lr": 0.001,
+        "gamma": 0.99,
+        "clip_eps": 0.2,
+        "lam": 0.95
+    }
+}

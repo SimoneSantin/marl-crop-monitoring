@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 from utils.constants import COUNT_MARKER
 from env.custom_map import CustomMapEnv
-
+from utils.agent import Agent
 from baselines.greedy_planner import GreedyIGPlannerScalar
 from baselines.dec_mcts_planner import DecMCTSPlanner
 
@@ -30,7 +30,7 @@ def plot_belief_heatmap(belief, title, step=None, cls=None):
     plt.close()
 
 
-env = CustomMapEnv()
+env = CustomMapEnv(40)
 
 planner = GreedyIGPlannerScalar(
     field_size=env.field_size,
@@ -38,11 +38,10 @@ planner = GreedyIGPlannerScalar(
     scalar_sensor=env.scalar_sensor
 )
 
+agent = Agent(env, COUNT_MARKER, agent_id=0, planner=planner)
 obs, _ = env.reset()
-
-belief_map = np.ones(
-    (env.field_size, env.field_size, COUNT_MARKER)
-) / COUNT_MARKER
+print(obs)
+agent.reset()
 
 accuracy_history_greedy = []
 
@@ -52,35 +51,29 @@ step = 0
 while not done:
 
     if step % 200 == 0 or step == 999:
-        plot_belief_heatmap(belief_map, title="Belief Map Greedy", step=step)
+        plot_belief_heatmap(agent.belief_map, title="Belief Map Greedy", step=step)
+    obs = obs[0]
     sensor_dist = obs[9:]
 
-    x, y = env.agent_pos
+ 
+    agent.update_belief(sensor_dist)
 
-    # Bayesian update
-    belief_map[x, y] *= sensor_dist
-    belief_map[x, y] /= belief_map[x, y].sum()
-
-    pred_map = np.argmax(belief_map, axis=2)
-    true_map = env.grid_counts
-    angles = env.grid_angles
-    accuracy = (pred_map == true_map).mean()
+    accuracy = agent.compute_accuracy()
     accuracy_history_greedy.append(accuracy)
 
-    action = planner.choose_action(env.agent_pos, belief_map, angles)
+    action = agent.choose_action(obs)
 
-    obs, reward, terminated, truncated, _ = env.step(action)
+    obs, reward, terminated, truncated, _ = env.step([action])
     step += 1
     done = terminated or truncated
 
 
 planner = DecMCTSPlanner(env)
 
+agent = Agent(env, COUNT_MARKER, agent_id=0, planner=planner)
 obs, _ = env.reset()
 
-belief_map = np.ones(
-    (env.field_size, env.field_size, COUNT_MARKER)
-) / COUNT_MARKER
+agent.reset()
 
 accuracy_history_mcts = []
 
@@ -89,27 +82,20 @@ step = 0
 while not done:
 
     if step % 200 == 0 or step == 999:
-        plot_belief_heatmap(belief_map, title="Belief Map Dec-MCTS", step=step)
+        plot_belief_heatmap(agent.belief_map, title="Belief Map Dec-MCTS", step=step)
 
+    obs = obs[0]
     sensor_dist = obs[9:]
 
-    x, y = env.agent_pos
 
-    # Bayesian update
-    belief_map[x, y] *= sensor_dist
-    belief_map[x, y] /= belief_map[x, y].sum()
+    agent.update_belief(sensor_dist)
 
-    pred_map = np.argmax(belief_map, axis=2)
-    true_map = env.grid_counts
-
-    angles = env.grid_angles
-    accuracy = (pred_map == true_map).mean()
+    accuracy = agent.compute_accuracy()
     accuracy_history_mcts.append(accuracy)
 
-    action = planner.choose_action(env.agent_pos, belief_map, angles)
+    action = agent.choose_action(obs)
 
-    obs, reward, terminated, truncated, _ = env.step(action)
-    print("Action:", action, "Reward:", reward, "Accuracy:", accuracy) 
+    obs, reward, terminated, truncated, _ = env.step([action])
     step += 1
     done = terminated or truncated
 

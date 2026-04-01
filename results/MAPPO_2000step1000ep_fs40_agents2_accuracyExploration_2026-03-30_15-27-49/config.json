@@ -1,0 +1,30 @@
+{
+    "algorithm": "MAPPO",
+    "experiment_name": "2000step1000ep",
+    "env": {
+        "field_size": 40,
+        "num_agents": 2,
+        "max_steps": 2000
+    },
+    "reward": {
+        "type": "accuracyExploration",
+        "formula": "reward = new_cell * 0.2 - 0.01 + accuracy * 200.0 ",
+        "new_cell_weight": 0.2,
+        "collision_weight": 0.0,
+        "step_penalty": 0.01,
+        "alignment_weight": 0.0,
+        "completion_bonus": 0.0,
+        "completion_threshold": 0.95,
+        "belief_weight": 0,
+        "accuracy_weight": 200.0
+    },
+    "training": {
+        "num_episodes": 500,
+        "lr": 0.0001,
+        "gamma": 0.99,
+        "clip_eps": 0.2,
+        "lam": 0.95,
+        "epochs": 5,
+        "mini_batch_size": 128
+    }
+}
