@@ -6,54 +6,195 @@ import numpy as np
 
 
 # =========================
-# ACTOR (CONDIVISO)
+# ACTOR RICORRENTE
 # =========================
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
 class Actor(nn.Module):
     def __init__(self, obs_dim, action_dim, hidden_dim=128):
         super().__init__()
-        self.fc1 = nn.Linear(obs_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.hidden_dim = hidden_dim
+
+        self.patch_dim = 27
+        self.other_dim = obs_dim - self.patch_dim
+
+        # CNN sulla patch 3x3 con 3 canali
+        self.cnn = nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+
+        self.cnn_out_dim = 16 * 3 * 3
+
+        self.fc_other = nn.Sequential(
+            nn.Linear(self.other_dim, hidden_dim),
+            nn.ReLU()
+        )
+
+        self.fc_combined = nn.Linear(self.cnn_out_dim + hidden_dim, hidden_dim)
+        self.pre_lstm_norm = nn.LayerNorm(hidden_dim)
+
+        self.lstm = nn.LSTM(hidden_dim, hidden_dim, batch_first=True)
         self.fc_out = nn.Linear(hidden_dim, action_dim)
 
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return F.softmax(self.fc_out(x), dim=-1)
+    def forward(self, x, h):
+        # x: (B, T, obs_dim)
+        B, T, D = x.shape
+
+        patch = x[:, :, :self.patch_dim]   # (B, T, 27)
+        other = x[:, :, self.patch_dim:]   # (B, T, other_dim)
+
+        patch = patch.contiguous().view(B * T, 3, 3, 3)   # (B*T, C, H, W)
+        patch_feat = self.cnn(patch)
+
+        other = other.contiguous().view(B * T, self.other_dim)
+        other_feat = self.fc_other(other)
+
+        combined = torch.cat([patch_feat, other_feat], dim=-1)
+        combined = F.relu(self.fc_combined(combined))
+        combined = self.pre_lstm_norm(combined)
+
+        combined = combined.view(B, T, self.hidden_dim)
+
+        x, h = self.lstm(combined, h)
+        logits = self.fc_out(x)
+
+        return logits, h
 
 
 # =========================
-# CRITIC (CENTRALIZZATO)
+# CRITIC RICORRENTE
 # =========================
 class Critic(nn.Module):
-    def __init__(self, global_dim, hidden_dim=256):
+    def __init__(self, field_size, n_agents, hidden_dim=128):
         super().__init__()
-        self.fc1 = nn.Linear(global_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.hidden_dim = hidden_dim
+
+        self.field_size = field_size
+        self.n_agents = n_agents
+
+        # -------------------------
+        # CNN su visited_mask (1, H, W)
+        # -------------------------
+        self.cnn = nn.Sequential(
+            nn.Conv2d(1, 16, 3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, 3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+
+        with torch.no_grad():
+            dummy = torch.zeros(1, 1, field_size, field_size)
+            self.cnn_out_dim = self.cnn(dummy).shape[1]
+
+        # -------------------------
+        # Agent positions
+        # -------------------------
+        self.fc_agents = nn.Sequential(
+            nn.Linear(n_agents * 2, hidden_dim),
+            nn.ReLU()
+        )
+
+        # -------------------------
+        # Fusione
+        # -------------------------
+        self.fc_combined = nn.Linear(self.cnn_out_dim + hidden_dim, hidden_dim)
+
+        self.lstm = nn.LSTM(hidden_dim, hidden_dim, batch_first=True)
+
         self.fc_out = nn.Linear(hidden_dim, 1)
 
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.fc_out(x)
+    def forward(self, x, h):
+        # x: (B, T, global_dim)
 
+        B, T, D = x.shape
+
+        # -------------------------
+        # SPLIT
+        # -------------------------
+        map_size = self.field_size * self.field_size
+
+        visited = x[:, :, :map_size]
+        agents = x[:, :, map_size:]
+
+        # -------------------------
+        # CNN
+        # -------------------------
+        visited = visited.view(B * T, 1, self.field_size, self.field_size)
+        cnn_feat = self.cnn(visited)
+
+        # -------------------------
+        # Agents
+        # -------------------------
+        agents = agents.view(B * T, -1)
+        agent_feat = self.fc_agents(agents)
+
+        # -------------------------
+        # Combine
+        # -------------------------
+        combined = torch.cat([cnn_feat, agent_feat], dim=-1)
+        combined = F.relu(self.fc_combined(combined))
+
+        combined = combined.view(B, T, self.hidden_dim)
+
+        # -------------------------
+        # LSTM
+        # -------------------------
+        x, h = self.lstm(combined, h)
+
+        values = self.fc_out(x).squeeze(-1)
+
+        return values, h
 
 # =========================
-# MAPPO SHARED ACTOR
+# RECURRENT MAPPO
 # =========================
 class MAPPOPlannerMultiAgent:
-    def __init__(self, obs_dim, action_dim, agents, field_size, num_classes,
-                 lr, gamma, clip_eps, lam, epochs, mini_batch_size):
-
+    def __init__(
+        self,
+        obs_dim,
+        action_dim,
+        agents,
+        field_size,
+        num_classes,
+        lr,
+        gamma,
+        clip_eps,
+        lam,
+        epochs,
+        mini_batch_size,
+        hidden_dim=128,
+        chunk_len=16
+    ):
         self.agents = agents
         self.n_agents = len(agents)
 
-        # Actor condiviso
-        self.actor = Actor(obs_dim, action_dim)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr)
+        self.hidden_dim = hidden_dim
+        self.chunk_len = chunk_len
 
-        # Critic centralizzato
-        input_dim = field_size * field_size + self.n_agents * 2
-        self.critic = Critic(input_dim)
+        # hidden state online per l'actor (esecuzione step-by-step)
+        self.actor_hidden_states = [
+            (
+                torch.zeros(1, 1, self.hidden_dim),  # h
+                torch.zeros(1, 1, self.hidden_dim)   # c
+            )
+            for _ in range(self.n_agents)
+        ]
+
+        # actor e critic ricorrenti
+        self.actor = Actor(obs_dim, action_dim, hidden_dim=self.hidden_dim)
+        self.critic = Critic(
+            field_size=field_size,
+            n_agents=self.n_agents,
+            hidden_dim=self.hidden_dim
+        )
+
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
         self.gamma = gamma
@@ -61,18 +202,35 @@ class MAPPOPlannerMultiAgent:
         self.lam = lam
         self.epochs = epochs
         self.mini_batch_size = mini_batch_size
-        # Buffer unico
+
         self.buffer = []
 
+    # =========================
+    # RESET HIDDEN STATES
+    # =========================
+    def reset_hidden_states(self):
+        self.actor_hidden_states = [
+            (
+                torch.zeros(1, 1, self.hidden_dim),
+                torch.zeros(1, 1, self.hidden_dim)
+            )
+            for _ in range(self.n_agents)
+        ]
     # =========================
     # ACT
     # =========================
     def act(self, obs, agent_id):
-        obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+        obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
 
-        probs = self.actor(obs_tensor)
-        dist = Categorical(probs)
+        logits, h_new = self.actor(obs_tensor, self.actor_hidden_states[agent_id])
+        self.actor_hidden_states[agent_id] = (
+            h_new[0].detach(),
+            h_new[1].detach()
+        )
 
+        logits = logits.squeeze(0).squeeze(0)
+
+        dist = Categorical(logits=logits)
         action = dist.sample()
         log_prob = dist.log_prob(action)
 
@@ -93,7 +251,7 @@ class MAPPOPlannerMultiAgent:
         })
 
     # =========================
-    # GAE
+    # GAE SU SINGOLA TRAIETTORIA
     # =========================
     def compute_gae(self, rewards, values, dones):
         advantages = []
@@ -112,25 +270,13 @@ class MAPPOPlannerMultiAgent:
         return torch.tensor(advantages, dtype=torch.float32)
 
     # =========================
-    # UPDATE
+    # COSTRUZIONE CHUNK
     # =========================
-    def update(self):
-        if len(self.buffer) == 0:
-            return
+    def _build_chunks(self):
+        chunks = []
 
-        all_obs = []
-        all_actions = []
-        all_log_probs = []
-        all_adv = []
-        all_global_states = []
-        all_returns = []
-
-        # ==========================================
-        # PREPARA DATI PER OGNI AGENTE DAL BUFFER UNICO
-        # ==========================================
         for agent_id in range(self.n_agents):
             agent_data = [b for b in self.buffer if b["agent_id"] == agent_id]
-
             if len(agent_data) == 0:
                 continue
 
@@ -158,89 +304,161 @@ class MAPPOPlannerMultiAgent:
                 dtype=torch.float32
             )
 
-            # critic values per questa traiettoria agente
-            values = self.critic(global_states).squeeze().detach()
+            # critic ricorrente: valori sull'intera traiettoria
+            with torch.no_grad():
+                gs_seq = global_states.unsqueeze(0)  # (1, T, global_dim)
+                h0_v = (
+                    torch.zeros(1, 1, self.hidden_dim),
+                    torch.zeros(1, 1, self.hidden_dim)
+                )
+                values_seq, _ = self.critic(gs_seq, h0_v)
+                values = values_seq.squeeze(0)  # (T,)
+                
+            raw_adv = self.compute_gae(rewards, values, dones)
+            returns = raw_adv + values
+            adv = (raw_adv - raw_adv.mean()) / (raw_adv.std() + 1e-8)
 
-            # GAE per agente
-            adv = self.compute_gae(rewards, values, dones)
+            T = obs.size(0)
+            for start in range(0, T, self.chunk_len):
+                end = min(start + self.chunk_len, T)
 
-            # normalizzazione advantage
-            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+                chunks.append({
+                    "obs": obs[start:end],                      # (L, obs_dim)
+                    "actions": actions[start:end],             # (L,)
+                    "old_log_probs": old_log_probs[start:end], # (L,)
+                    "adv": adv[start:end],                     # (L,)
+                    "returns": returns[start:end],             # (L,)
+                    "global_states": global_states[start:end], # (L, global_dim)
+                })
 
-            returns = adv + values
+        return chunks
 
-            all_obs.append(obs)
-            all_actions.append(actions)
-            all_log_probs.append(old_log_probs)
-            all_adv.append(adv)
-            all_global_states.append(global_states)
-            all_returns.append(returns)
+    # =========================
+    # PADDING CHUNKS
+    # =========================
+    def _pad_batch(self, batch_chunks):
+        max_len = max(c["obs"].size(0) for c in batch_chunks)
+        batch_size = len(batch_chunks)
 
-        if len(all_obs) == 0:
+        obs_batch = []
+        actions_batch = []
+        old_log_probs_batch = []
+        adv_batch = []
+        returns_batch = []
+        global_states_batch = []
+        mask_batch = []
+
+        for c in batch_chunks:
+            seq_len = c["obs"].size(0)
+            pad = max_len - seq_len
+
+            obs_batch.append(F.pad(c["obs"], (0, 0, 0, pad)))
+            actions_batch.append(F.pad(c["actions"], (0, pad), value=0))
+            old_log_probs_batch.append(F.pad(c["old_log_probs"], (0, pad), value=0.0))
+            adv_batch.append(F.pad(c["adv"], (0, pad), value=0.0))
+            returns_batch.append(F.pad(c["returns"], (0, pad), value=0.0))
+            global_states_batch.append(F.pad(c["global_states"], (0, 0, 0, pad)))
+
+            mask = torch.cat([
+                torch.ones(seq_len, dtype=torch.bool),
+                torch.zeros(pad, dtype=torch.bool)
+            ])
+            mask_batch.append(mask)
+
+        obs_batch = torch.stack(obs_batch)                   # (B, L, obs_dim)
+        actions_batch = torch.stack(actions_batch)           # (B, L)
+        old_log_probs_batch = torch.stack(old_log_probs_batch)
+        adv_batch = torch.stack(adv_batch)
+        returns_batch = torch.stack(returns_batch)
+        global_states_batch = torch.stack(global_states_batch)
+        mask_batch = torch.stack(mask_batch)                 # (B, L)
+
+        return (
+            obs_batch,
+            actions_batch,
+            old_log_probs_batch,
+            adv_batch,
+            returns_batch,
+            global_states_batch,
+            mask_batch
+        )
+
+    # =========================
+    # UPDATE
+    # =========================
+    def update(self):
+        if len(self.buffer) == 0:
             return
 
-        # ==========================================
-        # CONCATENAZIONE GLOBALE
-        # ==========================================
-        obs = torch.cat(all_obs, dim=0)
-        actions = torch.cat(all_actions, dim=0)
-        old_log_probs = torch.cat(all_log_probs, dim=0)
-        adv = torch.cat(all_adv, dim=0)
+        chunks = self._build_chunks()
+        if len(chunks) == 0:
+            return
 
-        global_states = torch.cat(all_global_states, dim=0)
-        returns = torch.cat(all_returns, dim=0)
-
-        dataset_size = obs.size(0)
-        indices = torch.randperm(dataset_size)
         for _ in range(self.epochs):
+            np.random.shuffle(chunks)
 
-            indices = torch.randperm(dataset_size)
+            for start in range(0, len(chunks), self.mini_batch_size):
+                batch_chunks = chunks[start:start + self.mini_batch_size]
 
-            for start in range(0, dataset_size, self.mini_batch_size):
-                end = start + self.mini_batch_size
-                batch_idx = indices[start:end]
+                (
+                    obs_batch,
+                    actions_batch,
+                    old_log_probs_batch,
+                    adv_batch,
+                    returns_batch,
+                    global_states_batch,
+                    mask_batch
+                ) = self._pad_batch(batch_chunks)
 
-                mb_obs = obs[batch_idx]
-                mb_actions = actions[batch_idx]
-                mb_old_log_probs = old_log_probs[batch_idx]
-                mb_adv = adv[batch_idx]
-                mb_global_states = global_states[batch_idx]
-                mb_returns = returns[batch_idx]
+                batch_size = obs_batch.size(0)
 
-                # =========================
-                # CRITIC
-                # =========================
-                values = self.critic(mb_global_states).squeeze()
+                # -------------------------
+                # Critic
+                # -------------------------
+                h0_v = (
+                    torch.zeros(1, batch_size, self.hidden_dim),
+                    torch.zeros(1, batch_size, self.hidden_dim)
+                )
+                values_pred, _ = self.critic(global_states_batch, h0_v)
 
-                critic_loss = F.smooth_l1_loss(values, mb_returns.detach())
+                critic_loss = F.smooth_l1_loss(
+                    values_pred[mask_batch],
+                    returns_batch[mask_batch].detach()
+                )
 
                 self.critic_optimizer.zero_grad()
                 critic_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 10.0)
                 self.critic_optimizer.step()
 
-                # =========================
-                # ACTOR
-                # =========================
-                probs = self.actor(mb_obs)
-                dist = Categorical(probs)
+                # -------------------------
+                # Actor
+                # -------------------------
+                h0_pi = (
+                    torch.zeros(1, batch_size, self.hidden_dim),
+                    torch.zeros(1, batch_size, self.hidden_dim)
+                )
+                logits, _ = self.actor(obs_batch, h0_pi)
 
-                new_log_probs = dist.log_prob(mb_actions)
-                entropy = dist.entropy().mean()
+                dist = Categorical(logits=logits)
+                new_log_probs = dist.log_prob(actions_batch)   # (B, L)
+                entropy = dist.entropy()                       # (B, L)
 
-                ratio = torch.exp(new_log_probs - mb_old_log_probs)
+                ratio = torch.exp(new_log_probs - old_log_probs_batch)
 
-                surr1 = ratio * mb_adv.detach()
-                surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * mb_adv.detach()
+                surr1 = ratio * adv_batch.detach()
+                surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * adv_batch.detach()
 
-                ppo_loss = -torch.min(surr1, surr2).mean()
-                actor_loss = ppo_loss - 0.01 * entropy
+                actor_loss = -torch.min(surr1, surr2)
+                actor_loss = actor_loss[mask_batch].mean()
+
+                entropy_loss = entropy[mask_batch].mean()
+
+                total_actor_loss = actor_loss - 0.01 * entropy_loss
 
                 self.actor_optimizer.zero_grad()
-                actor_loss.backward()
+                total_actor_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 10.0)
                 self.actor_optimizer.step()
-        # =========================
-        # RESET BUFFER
-        # =========================
+
         self.buffer = []

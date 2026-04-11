@@ -29,32 +29,31 @@ class MAPPOTest:
     def build_default_config(self):
         return {
             "algorithm": "MAPPO",
-            "experiment_name": "1000step3000ep",
+            "experiment_name": "CNN-LSTM",
             "env": {
-                "field_size": 20,
-                "num_agents": 1,
-                "max_steps": 1000
+                "field_size": 40,
+                "num_agents": 3,
+                "max_steps": 2000
             },
             "reward": {
-                "type": "LocalAccuracyExploration3",
+                "type": "collision_aware",
                 "formula": "reward = new_cell * 0.2 - 0.01 + localAccuracy * 5.0, completion_bonus",
                 "new_cell_weight": 0.5,
-                "collision_weight": 0.0,
+                "collision_weight": 2.0,
                 "step_penalty": 0.01,
-                "alignment_weight": 0.1,
+                "alignment_weight": 2.0,
                 "completion_bonus": 0.0,
                 "completion_threshold": 0.95,
-                "belief_weight": 0,
-                "accuracy_weight": 5.0
+                "accuracy_weight": 1.0
             },
             "training": {
-                "num_episodes": 3000,
-                "lr": 1e-4,
+                "num_episodes": 500,
+                "lr": 0.0001,
                 "gamma": 0.99,
-                "clip_eps": 0.2,
+                "clip_eps": 0.1,
                 "lam": 0.95,
                 "epochs": 5,
-                "mini_batch_size": 128
+                "mini_batch_size": 16
             }
         }
 
@@ -97,6 +96,7 @@ class MAPPOTest:
         collisions = metrics["collisions"]
         efficiency = metrics["efficiency"]
         accuracy = metrics["accuracy"]
+        alignment = metrics["alignment"]
 
         #check metriche
         terms = metrics["terms"]
@@ -105,9 +105,20 @@ class MAPPOTest:
         #step_terms = [t["step"] for t in terms]
         alignment_terms = [t["alignment"] for t in terms]
         accuracy_terms = [t["accuracy"] for t in terms]
-        belief_terms = [t["belief"] for t in terms]
+  
 
         plt.figure()
+        plt.plot(alignment, alpha=0.3, label="alignment")
+        ma = self.moving_average(alignment)
+        plt.plot(range(len(ma)), ma, label="moving avg")
+        plt.title("Episode Alignment")
+        plt.xlabel("Episode")
+        plt.ylabel("Alignment")
+        plt.legend()
+        plt.savefig(os.path.join(self.plots_dir, "alignment_plot.png"))
+        plt.close()
+        plt.figure()
+
         plt.plot(rewards, alpha=0.3, label="reward")
         ma = self.moving_average(rewards)
         plt.plot(range(len(ma)), ma, label="moving avg")
@@ -211,7 +222,6 @@ class MAPPOTest:
         plt.plot(self.moving_average(collisions_terms), label="collisions")
         plt.plot(self.moving_average(alignment_terms), label="alignment")
         plt.plot(self.moving_average(accuracy_terms), label="accuracy")
-        plt.plot(self.moving_average(belief_terms), label="belief")
 
         plt.title("Reward Terms Contribution (Smoothed)")
         plt.xlabel("Episode")
@@ -285,7 +295,6 @@ class MAPPOTest:
             planner=self.planner,
             num_episodes=train_cfg["num_episodes"],
             reward_weights={
-                "belief": reward_cfg["belief_weight"],
                 "accuracy": reward_cfg["accuracy_weight"]
             }
         )

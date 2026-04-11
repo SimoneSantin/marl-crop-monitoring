@@ -43,7 +43,7 @@ class CustomMapEnv(gym.Env):
         self.action_space = spaces.Discrete(4)
 
         # osservazione: POV + sensori 
-        self.obs_dim = 9 + COUNT_MARKER + 19
+        self.obs_dim = 9 + COUNT_MARKER + 34
 
         self.observation_space = spaces.Box(
             low=-1,
@@ -170,17 +170,25 @@ class CustomMapEnv(gym.Env):
         obs = self._get_obs(alignments)
 
         mean_alignment = float(np.mean(alignments))
-
+        print(f" mean: {mean_alignment:.3f}")
         if self.algorithm == "MAPPO":
+
+            proximity_penalty = self.compute_proximity_penalty(
+                self.agent_pos,
+                threshold=2,
+                weight=0.2
+            )
+
             reward = (
                 self.reward_config["new_cell_weight"] * new_cells
                 - self.reward_config["collision_weight"] * collisions
                 - self.reward_config["step_penalty"]
                 + self.reward_config["alignment_weight"] * mean_alignment
+                - proximity_penalty
             )
 
-            if coverage > self.reward_config["completion_threshold"]:
-                reward += self.reward_config["completion_bonus"]
+            #if coverage > self.reward_config["completion_threshold"]:
+                #reward += self.reward_config["completion_bonus"]
                 
             rewards = [reward for _ in range(self.num_agents)]
 
@@ -188,10 +196,11 @@ class CustomMapEnv(gym.Env):
             reward = -0.05
             rewards = [reward for _ in range(self.num_agents)]
         # aggiorna stato
-
+        
         #check metriche
         new_cells_term = self.reward_config["new_cell_weight"] * new_cells
         collisions_term = self.reward_config["collision_weight"] * collisions
+  
         step_term = self.reward_config["step_penalty"]
         alignment_term = self.reward_config["alignment_weight"] * mean_alignment
 
@@ -206,7 +215,7 @@ class CustomMapEnv(gym.Env):
                 "new_cells": new_cells_term,
                 "collisions": collisions_term,
                 "step": step_term,
-                "alignment": alignment_term
+                "alignment": mean_alignment
             }
         }
 
@@ -309,3 +318,21 @@ class CustomMapEnv(gym.Env):
     def set_noise_levels(self, scalar=None, vector=None):
 
         pass
+
+    def compute_proximity_penalty(self, agent_positions, threshold=2, weight=0.05):
+        penalty = 0.0
+        n = len(agent_positions)
+
+        for i in range(n):
+            xi, yi = agent_positions[i]
+
+            for j in range(i + 1, n):
+                xj, yj = agent_positions[j]
+
+                dist = abs(xi - xj) + abs(yi - yj)
+
+                # penalizza solo se vicini ma non nella stessa cella
+                if 1 <= dist <= threshold:
+                    penalty += weight * (threshold - dist + 1)
+
+        return penalty

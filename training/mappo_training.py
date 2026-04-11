@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from utils.constants import COUNT_MARKER
 
 
@@ -17,6 +18,7 @@ class MAPPOTrainer:
         self.accuracy_history = []
 
     def train(self):
+        alignment_history = []
         rewards_history = []
         coverage_history = []
         episode_lengths = []
@@ -32,12 +34,13 @@ class MAPPOTrainer:
             # 🔥 RESET BELIEF DEGLI AGENTI
             for agent in self.planner.agents:
                 agent.reset()
-
+            self.planner.reset_hidden_states()
             episode_paths = [[] for _ in range(self.env.num_agents)]
             episode_accuracy = []
             episode_reward = 0.0
             episode_new_cells = 0
             episode_collisions = 0
+            episode_alignment = 0
             steps = 0
 
             episode_terms = {
@@ -90,19 +93,20 @@ class MAPPOTrainer:
                     x, y = self.env.agent_pos[i]
 
                     old_belief = agent.belief_map[x, y].copy()
-                    H_before = -np.sum(old_belief * np.log(old_belief + 1e-9))
-                    H_before /= np.log(agent.num_classes)
 
                     sensor_dist = next_obs[i][9: 9 + COUNT_MARKER]
                     agent.update_belief(sensor_dist)
 
                     new_belief = agent.belief_map[x, y]
-                    H_after = -np.sum(new_belief * np.log(new_belief + 1e-9))
-                    H_after /= np.log(agent.num_classes)
 
-                    entropy_gain = H_before - H_after
+                    true_class = self.env.grid_counts[x, y]   # indice classe vera, es. 0,1,2,...
 
-                    local_info_bonus = self.reward_weights["accuracy"] * entropy_gain
+                    ce_before = -np.log(old_belief[true_class] + 1e-9)
+                    ce_after  = -np.log(new_belief[true_class] + 1e-9)
+
+                    ce_gain = ce_before - ce_after
+
+                    local_info_bonus = self.reward_weights["accuracy"] * ce_gain
                     local_accuracy_bonus_per_agent.append(local_info_bonus)
 
                 shaped_rewards = [
@@ -137,12 +141,12 @@ class MAPPOTrainer:
                 episode_reward += np.mean(shaped_rewards)
                 episode_new_cells += info["new_cells"]
                 episode_collisions += info["collisions"]
-
+                episode_alignment += info["reward_terms"]["alignment"]
+                print(episode_collisions)
                 episode_terms["new_cells"] += info["reward_terms"]["new_cells"]
                 episode_terms["collisions"] += info["reward_terms"]["collisions"]
                 episode_terms["step"] += info["reward_terms"]["step"]
                 episode_terms["alignment"] += info["reward_terms"]["alignment"]
-                episode_terms["belief"] += 0.0
                 episode_terms["accuracy"] += float(np.mean(local_accuracy_bonus_per_agent))
 
                 steps += 1
@@ -168,6 +172,7 @@ class MAPPOTrainer:
                 np.mean(episode_accuracy) if episode_accuracy else 0.0
             )
             rewards_history.append(episode_reward)
+            alignment_history.append(episode_alignment / max(steps, 1))
             coverage_history.append(np.mean(self.env.visited_mask))
             episode_lengths.append(steps)
             new_cells_history.append(episode_new_cells)
@@ -185,58 +190,109 @@ class MAPPOTrainer:
             "visit_heatmap": self.visit_heatmap,
             "episode_paths": self.last_episode_paths,
             "accuracy": self.accuracy_history,
-            "terms": terms_history
+            "terms": terms_history,
+            "alignment": alignment_history
         }
 
     def enrich_obs_with_belief(self, obs, agent):
         x, y = self.env.agent_pos[agent.agent_id]
 
-        confidence_patch = []
-        entropy_patch = []
+        visited_patch = np.zeros((3, 3), dtype=np.float32)
+        entropy_patch = np.zeros((3, 3), dtype=np.float32)
+        agents_patch = np.zeros((3, 3), dtype=np.float32)
 
         for i in range(-1, 2):
             for j in range(-1, 2):
+                px, py = i + 1, j + 1
                 nx, ny = x + i, y + j
 
                 if 0 <= nx < self.env.field_size and 0 <= ny < self.env.field_size:
-                    local_belief = agent.belief_map[nx, ny]
+                    visited_patch[px, py] = float(self.env.visited_mask[nx, ny])
 
-                    confidence = np.max(local_belief)
-
-                    entropy = -np.sum(local_belief * np.log(local_belief + 1e-9))
+                    belief = agent.belief_map[nx, ny]
+                    entropy = -np.sum(belief * np.log(belief + 1e-9))
                     entropy /= np.log(agent.num_classes)
+                    entropy_patch[px, py] = entropy
 
+                    occupied = 0.0
+                    for other_id, (ax, ay) in enumerate(self.env.agent_pos):
+                        if other_id != agent.agent_id and ax == nx and ay == ny:
+                            occupied = 1.0
+                            break
+                    agents_patch[px, py] = occupied
                 else:
-                    confidence = 0.0
-                    entropy = 0.0
+                    visited_patch[px, py] = -1.0
+                    entropy_patch[px, py] = 0.0
+                    agents_patch[px, py] = 0.0
 
-                confidence_patch.append(confidence)
-                entropy_patch.append(entropy)
-
-        confidence_patch = np.array(confidence_patch, dtype=np.float32)
-        entropy_patch = np.array(entropy_patch, dtype=np.float32)
-
-        # alignment corrente
-        alpha = self.env.grid_angles[x, y]
-
-        plant_vec_dy = np.cos(alpha)
-        plant_vec_dx = np.sin(alpha)
-
-        drone_dx = self.env.last_move_vector[agent.agent_id][0]
-        drone_dy = self.env.last_move_vector[agent.agent_id][1]
-
-        norm_drone = np.sqrt(drone_dx ** 2 + drone_dy ** 2)
-
-        if norm_drone > 0:
-            dot_product = (drone_dx * plant_vec_dx) + (drone_dy * plant_vec_dy)
-            alignment = abs(dot_product / norm_drone)
-        else:
-            alignment = 0.0
-
-        extra_features = np.concatenate([
-            confidence_patch,
+        # CNN input (3 canali)
+        local_patch = np.stack([
+            visited_patch,
             entropy_patch,
-            np.array([alignment], dtype=np.float32)
-        ])
+            agents_patch
+        ]).astype(np.float32)
 
-        return np.concatenate((obs, extra_features)).astype(np.float32)
+        local_patch_flat = local_patch.flatten()  # 27
+
+        sensor_dist = obs[9:].astype(np.float32)
+
+        # 🔥 NUOVA FEATURE: shared uncertainty
+        shared_uncertainty_coarse = self.compute_shared_uncertainty_coarse_map(
+            target_agent_id=agent.agent_id,
+            coarse_size=4
+        )
+
+        enriched_obs = np.concatenate([
+            local_patch_flat,
+            sensor_dist,
+            shared_uncertainty_coarse
+        ]).astype(np.float32)
+
+        return enriched_obs
+                
+    def compute_shared_uncertainty_coarse_map(self, target_agent_id, coarse_size=4):
+        """
+        Coarse map dell'incertezza media degli ALTRI agenti (sempre disponibile).
+        
+        Args:
+            target_agent_id: agente per cui costruisci l'obs
+            coarse_size: dimensione della griglia coarse (es. 4 -> 4x4)
+
+        Returns:
+            np.array shape (coarse_size * coarse_size,)
+        """
+        field_size = self.env.field_size
+        block_h = field_size // coarse_size
+        block_w = field_size // coarse_size
+
+        shared_entropy_coarse = []
+
+        for bi in range(coarse_size):
+            for bj in range(coarse_size):
+                xs = bi * block_h
+                xe = (bi + 1) * block_h
+                ys = bj * block_w
+                ye = (bj + 1) * block_w
+
+                block_entropies = []
+
+                for other_id, other_agent in enumerate(self.planner.agents):
+                    if other_id == target_agent_id:
+                        continue
+
+                    belief_block = other_agent.belief_map[xs:xe, ys:ye]
+
+                    entropy_block = -np.sum(
+                        belief_block * np.log(belief_block + 1e-9),
+                        axis=2
+                    )
+                    entropy_block /= np.log(other_agent.num_classes)
+
+                    block_entropies.append(np.mean(entropy_block))
+
+                if len(block_entropies) == 0:
+                    shared_entropy_coarse.append(0.0)
+                else:
+                    shared_entropy_coarse.append(np.mean(block_entropies))
+
+        return np.array(shared_entropy_coarse, dtype=np.float32)
