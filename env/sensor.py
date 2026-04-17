@@ -2,42 +2,49 @@ import numpy as np
 from scipy.stats import vonmises, norm
 from utils.constants import COUNT_MARKER, COUNT_VECTOR
 
+import numpy as np
+from scipy.stats import norm
+from utils.constants import COUNT_MARKER
+
+
 class ScalarSensor:
     """
     Sensore per il conteggio (Ni).
     Il rumore dipende dinamicamente dall'allineamento (Occlusione).
     """
-    def __init__(self):
+
+    def __init__(self, num_noise_bins=21):
         self.num_classes = COUNT_MARKER
-        self.all_classes = np.arange(self.num_classes)
-        
-        # Definiamo i limiti della deviazione standard
-        # Min: Molto preciso (quando allineato)
-        # Max: Molto incerto (quando perpendicolare/occluso)
+        self.all_classes = np.arange(self.num_classes, dtype=np.float32)
+
         self.min_std = 0.1
         self.max_std = 5.0
+        self.num_noise_bins = num_noise_bins
+
+        # table[true_val, noise_bin, class]
+        self.table = np.zeros(
+            (self.num_classes, self.num_noise_bins, self.num_classes),
+            dtype=np.float32
+        )
+
+        for true_val in range(self.num_classes):
+            for noise_bin in range(self.num_noise_bins):
+                intensity = noise_bin / (self.num_noise_bins - 1)
+                current_std = self.min_std + intensity * (self.max_std - self.min_std)
+
+                pdf_vals = norm.pdf(self.all_classes, loc=true_val, scale=current_std)
+                pdf_vals /= (pdf_vals.sum() + 1e-9)
+
+                self.table[true_val, noise_bin] = pdf_vals.astype(np.float32)
+
+    def _quantize_noise(self, noise_intensity):
+        intensity = float(np.clip(noise_intensity, 0.0, 1.0))
+        return int(round(intensity * (self.num_noise_bins - 1)))
 
     def observe(self, true_val, noise_intensity):
-        """
-        Ritorna P(x | true_val).
-        
-        Args:
-            true_val (int): Il valore reale di Ni.
-            noise_intensity (float): Valore [0.0, 1.0] calcolato dall'ambiente.
-                                     0.0 = Allineamento Perfetto (Min Noise)
-                                     1.0 = Disallineamento Totale (Max Noise)
-        """
-        # Calcoliamo la std specifica per questo singolo step
-        intensity = np.clip(noise_intensity, 0.0, 1.0)
-        current_std = self.min_std + intensity * (self.max_std - self.min_std)
-        
-        # Gaussiana Discretizzata
-        pdf_vals = norm.pdf(self.all_classes, loc=true_val, scale=current_std)
-        
-        # Normalizzazione
-        pdf_vals /= (pdf_vals.sum() + 1e-9)
-        
-        return pdf_vals.astype(np.float32)
+        true_val = int(true_val)
+        noise_bin = self._quantize_noise(noise_intensity)
+        return self.table[true_val, noise_bin]
 
 
 class VectorSensor:

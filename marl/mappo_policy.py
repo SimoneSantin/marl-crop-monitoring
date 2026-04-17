@@ -8,55 +8,59 @@ import numpy as np
 # =========================
 # ACTOR RICORRENTE
 # =========================
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 
 class Actor(nn.Module):
     def __init__(self, obs_dim, action_dim, hidden_dim=128):
         super().__init__()
         self.hidden_dim = hidden_dim
 
-        self.patch_dim = 27
+        self.patch_dim = 18
         self.other_dim = obs_dim - self.patch_dim
 
-        # CNN sulla patch 3x3 con 3 canali
         self.cnn = nn.Sequential(
-            nn.Conv2d(3, 16, kernel_size=3, padding=1),
+            nn.Conv2d(2, 16, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Flatten()
         )
 
-        self.cnn_out_dim = 16 * 3 * 3
+        self.fc_patch = nn.Sequential(
+            nn.Linear(16 * 3 * 3, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim)
+        )
 
         self.fc_other = nn.Sequential(
             nn.Linear(self.other_dim, hidden_dim),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim)
         )
 
-        self.fc_combined = nn.Linear(self.cnn_out_dim + hidden_dim, hidden_dim)
-        self.pre_lstm_norm = nn.LayerNorm(hidden_dim)
+        self.fc_combined = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim)
+        )
 
+        self.pre_lstm_dropout = nn.Dropout(0.1)
         self.lstm = nn.LSTM(hidden_dim, hidden_dim, batch_first=True)
         self.fc_out = nn.Linear(hidden_dim, action_dim)
 
     def forward(self, x, h):
-        # x: (B, T, obs_dim)
         B, T, D = x.shape
 
-        patch = x[:, :, :self.patch_dim]   # (B, T, 27)
-        other = x[:, :, self.patch_dim:]   # (B, T, other_dim)
+        patch = x[:, :, :self.patch_dim]
+        other = x[:, :, self.patch_dim:]
 
-        patch = patch.contiguous().view(B * T, 3, 3, 3)   # (B*T, C, H, W)
+        patch = patch.contiguous().view(B * T, 2, 3, 3)
         patch_feat = self.cnn(patch)
+        patch_feat = self.fc_patch(patch_feat)
 
         other = other.contiguous().view(B * T, self.other_dim)
         other_feat = self.fc_other(other)
 
         combined = torch.cat([patch_feat, other_feat], dim=-1)
-        combined = F.relu(self.fc_combined(combined))
-        combined = self.pre_lstm_norm(combined)
+        combined = self.fc_combined(combined)
+        combined = self.pre_lstm_dropout(combined)
 
         combined = combined.view(B, T, self.hidden_dim)
 
@@ -65,80 +69,106 @@ class Actor(nn.Module):
 
         return logits, h
 
-
-# =========================
-# CRITIC RICORRENTE
-# =========================
 class Critic(nn.Module):
     def __init__(self, field_size, n_agents, hidden_dim=128):
         super().__init__()
         self.hidden_dim = hidden_dim
-
         self.field_size = field_size
         self.n_agents = n_agents
 
+        self.map_size = field_size * field_size
+        self.agent_pos_dim = n_agents * 2
+
         # -------------------------
-        # CNN su visited_mask (1, H, W)
+        # CNN su 2 canali spaziali:
+        # 1) visited_mask
+        # 2) shared_uncertainty_map
+        # input shape: (B*T, 2, H, W)
         # -------------------------
         self.cnn = nn.Sequential(
-            nn.Conv2d(1, 16, 3, stride=2, padding=1),
+            nn.Conv2d(2, 16, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(16, 32, 3, stride=2, padding=1),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.Flatten()
         )
 
         with torch.no_grad():
-            dummy = torch.zeros(1, 1, field_size, field_size)
+            dummy = torch.zeros(1, 2, field_size, field_size)
             self.cnn_out_dim = self.cnn(dummy).shape[1]
 
         # -------------------------
-        # Agent positions
+        # MLP per posizioni agenti
         # -------------------------
         self.fc_agents = nn.Sequential(
-            nn.Linear(n_agents * 2, hidden_dim),
-            nn.ReLU()
+            nn.Linear(self.agent_pos_dim, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim)
         )
 
         # -------------------------
         # Fusione
         # -------------------------
-        self.fc_combined = nn.Linear(self.cnn_out_dim + hidden_dim, hidden_dim)
+        self.fc_combined = nn.Sequential(
+            nn.Linear(self.cnn_out_dim + hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim)
+        )
 
+        self.pre_lstm_dropout = nn.Dropout(0.1)
+
+        # -------------------------
+        # LSTM
+        # -------------------------
         self.lstm = nn.LSTM(hidden_dim, hidden_dim, batch_first=True)
 
+        # -------------------------
+        # Output value
+        # -------------------------
         self.fc_out = nn.Linear(hidden_dim, 1)
 
     def forward(self, x, h):
-        # x: (B, T, global_dim)
+        """
+        x: (B, T, global_dim)
+
+        global state layout:
+        [ visited_mask_flat (H*W) |
+          uncertainty_map_flat (H*W) |
+          agent_positions_flat (n_agents*2) ]
+        """
 
         B, T, D = x.shape
+        map_size = self.map_size
+        pos_dim = self.agent_pos_dim
 
         # -------------------------
         # SPLIT
         # -------------------------
-        map_size = self.field_size * self.field_size
-
         visited = x[:, :, :map_size]
-        agents = x[:, :, map_size:]
+        uncertainty = x[:, :, map_size: 2 * map_size]
+        agents = x[:, :, 2 * map_size: 2 * map_size + pos_dim]
 
         # -------------------------
-        # CNN
+        # Spatial input: stack 2 channels
         # -------------------------
-        visited = visited.view(B * T, 1, self.field_size, self.field_size)
-        cnn_feat = self.cnn(visited)
+        visited = visited.contiguous().view(B * T, 1, self.field_size, self.field_size)
+        uncertainty = uncertainty.contiguous().view(B * T, 1, self.field_size, self.field_size)
+
+        spatial = torch.cat([visited, uncertainty], dim=1)  # (B*T, 2, H, W)
+        cnn_feat = self.cnn(spatial)
 
         # -------------------------
-        # Agents
+        # Agent positions
         # -------------------------
-        agents = agents.view(B * T, -1)
+        agents = agents.contiguous().view(B * T, pos_dim)
         agent_feat = self.fc_agents(agents)
 
         # -------------------------
         # Combine
         # -------------------------
         combined = torch.cat([cnn_feat, agent_feat], dim=-1)
-        combined = F.relu(self.fc_combined(combined))
+        combined = self.fc_combined(combined)
+        combined = self.pre_lstm_dropout(combined)
 
         combined = combined.view(B, T, self.hidden_dim)
 
@@ -147,10 +177,13 @@ class Critic(nn.Module):
         # -------------------------
         x, h = self.lstm(combined, h)
 
+        # -------------------------
+        # Output value
+        # -------------------------
         values = self.fc_out(x).squeeze(-1)
 
         return values, h
-
+    
 # =========================
 # RECURRENT MAPPO
 # =========================

@@ -29,7 +29,7 @@ class MAPPOTest:
     def build_default_config(self):
         return {
             "algorithm": "MAPPO",
-            "experiment_name": "CNN-LSTM",
+            "experiment_name": "new_belief_ActorCritic_update",
             "env": {
                 "field_size": 40,
                 "num_agents": 3,
@@ -38,22 +38,22 @@ class MAPPOTest:
             "reward": {
                 "type": "collision_aware",
                 "formula": "reward = new_cell * 0.2 - 0.01 + localAccuracy * 5.0, completion_bonus",
-                "new_cell_weight": 0.5,
-                "collision_weight": 2.0,
+                "new_cell_weight": 1.5,
+                "collision_weight": 1.0,
                 "step_penalty": 0.01,
-                "alignment_weight": 2.0,
-                "completion_bonus": 0.0,
+                "alignment_weight": 0.5,
+                "completion_bonus": 1.0,
                 "completion_threshold": 0.95,
                 "accuracy_weight": 1.0
             },
             "training": {
-                "num_episodes": 500,
-                "lr": 0.0001,
+                "num_episodes": 1000,
+                "lr": 5e-05,
                 "gamma": 0.99,
                 "clip_eps": 0.1,
                 "lam": 0.95,
-                "epochs": 5,
-                "mini_batch_size": 16
+                "epochs": 3,
+                "mini_batch_size": 32
             }
         }
 
@@ -92,17 +92,14 @@ class MAPPOTest:
         rewards = metrics["rewards"]
         coverage = metrics["coverage"]
         lengths = metrics["lengths"]
-        new_cells = metrics["new_cells"]
         collisions = metrics["collisions"]
-        efficiency = metrics["efficiency"]
         accuracy = metrics["accuracy"]
         alignment = metrics["alignment"]
+        accuracy_traces = metrics["accuracy_traces"]
 
         #check metriche
         terms = metrics["terms"]
-        new_cells_terms = [t["new_cells"] for t in terms]
         collisions_terms = [t["collisions"] for t in terms]
-        #step_terms = [t["step"] for t in terms]
         alignment_terms = [t["alignment"] for t in terms]
         accuracy_terms = [t["accuracy"] for t in terms]
   
@@ -150,16 +147,6 @@ class MAPPOTest:
         plt.close()
 
         plt.figure()
-        plt.plot(new_cells, alpha=0.3, label="new_cells")
-        ma = self.moving_average(new_cells)
-        plt.plot(range(len(ma)), ma, label="moving avg")
-        plt.title("New Cells per Episode")
-        plt.xlabel("Episode")
-        plt.ylabel("Cells discovered")
-        plt.savefig(os.path.join(self.plots_dir, "new_cells_plot.png"))
-        plt.close()
-
-        plt.figure()
         plt.plot(collisions, alpha=0.3, label="collisions")
         ma = self.moving_average(collisions)
         plt.plot(range(len(ma)), ma, label="moving avg")
@@ -180,24 +167,16 @@ class MAPPOTest:
         plt.close()
 
         plt.figure()
-        plt.plot(efficiency, alpha=0.3, label="efficiency")
-        ma = self.moving_average(efficiency)
-        plt.plot(range(len(ma)), ma, label="moving avg")
-        plt.title("Efficiency per Episode")
-        plt.xlabel("Episode")
-        plt.ylabel("Efficiency")
-        plt.savefig(os.path.join(self.plots_dir, "efficiency_plot.png"))
-        plt.close()
 
-        plt.figure(figsize=(6, 6))
-        normalized = metrics["visit_heatmap"] / np.max(metrics["visit_heatmap"])
-        plt.imshow(normalized, cmap="viridis", interpolation="nearest", origin="lower")
-        plt.title("Visit Heatmap")
-        plt.xlabel("X")
-        plt.ylabel("Y")
-        plt.colorbar()
-        plt.title("Cumulative Visited Heatmap")
-        plt.savefig(os.path.join(self.plots_dir, "visit_heatmap.png"))
+        for episode, trace in accuracy_traces.items():
+            steps = np.arange(len(trace))
+            plt.plot(steps, trace, label=f"episode {episode}")
+
+        plt.title("Accuracy During Selected Episodes")
+        plt.xlabel("Step")
+        plt.ylabel("Accuracy")
+        plt.legend()
+        plt.savefig(os.path.join(self.plots_dir, "accuracy_traces.png"))
         plt.close()
 
         plt.figure(figsize=(6, 6))
@@ -218,7 +197,6 @@ class MAPPOTest:
 
         plt.figure()
 
-        plt.plot(self.moving_average(new_cells_terms), label="new_cells")
         plt.plot(self.moving_average(collisions_terms), label="collisions")
         plt.plot(self.moving_average(alignment_terms), label="alignment")
         plt.plot(self.moving_average(accuracy_terms), label="accuracy")
