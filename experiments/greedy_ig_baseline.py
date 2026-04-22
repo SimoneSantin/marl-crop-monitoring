@@ -152,7 +152,8 @@ def run_greedy_ig(env, plots_dir):
         alignment_history.append(info["reward_terms"]["alignment"])
 
         total_new_cells += info["new_cells"]
-        coverage_history.append(total_new_cells)
+        visited_ratio = total_new_cells / (env.field_size * env.field_size)
+        coverage_history.append(visited_ratio)
 
         obs = next_obs
         step += 1
@@ -216,7 +217,8 @@ def run_dec_mcts(env, plots_dir):
         alignment_history.append(info["reward_terms"]["alignment"])
 
         total_new_cells += info["new_cells"]
-        coverage_history.append(total_new_cells)
+        visited_ratio = total_new_cells / (env.field_size * env.field_size)
+        coverage_history.append(visited_ratio)
 
         obs = next_obs
         step += 1
@@ -239,11 +241,11 @@ def run_dec_mcts(env, plots_dir):
 
 
 if __name__ == "__main__":
-    experiment_type = "baseline"
+    experiment_type = "20x20"
 
     base_dir, greedy_dir, mcts_dir = create_experiment_dirs(experiment_type)
 
-    env = CustomMapEnv(40)
+    env = CustomMapEnv(20)
 
     greedy_metrics = run_greedy_ig(env, greedy_dir)
     mcts_metrics = run_dec_mcts(env, mcts_dir)

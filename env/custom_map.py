@@ -329,7 +329,6 @@ class CustomMapEnv(gym.Env):
     def step(self, actions):
 
         self.current_step += 1
-
         alignments = []
         new_positions = []
         new_moves = []
@@ -482,8 +481,8 @@ class CustomMapEnv(gym.Env):
 
             pov_flat = pov.flatten().astype(np.float32)
             sensor_patch_flat = np.concatenate(sensor_patch).astype(np.float32)
+          
             alignment_patch_flat = np.array(alignment_patch, dtype=np.float32)
-
             obs = np.concatenate([
                 #pov_flat,               # 9
                 alignment_patch_flat,   # 9
@@ -566,3 +565,29 @@ class CustomMapEnv(gym.Env):
         alignment = abs(dot_product / norm_drone)
 
         return float(np.clip(alignment, 0.0, 1.0))
+    
+import numpy as np
+import matplotlib.pyplot as plt
+
+def plot_patch_with_direction(alignment_patch, direction=(1, 0)):
+    grid = alignment_patch.reshape(3, 3)
+
+    fig, ax = plt.subplots(figsize=(3, 3))
+    ax.imshow(grid, cmap='viridis', vmin=0, vmax=1)
+
+    # numeri
+    for i in range(3):
+        for j in range(3):
+            ax.text(j, i, f"{grid[i, j]:.2f}",
+                    ha='center', va='center', color='white')
+
+    # freccia al centro (direzione drone)
+    dx, dy = direction
+    ax.arrow(1, 1, dx*0.5, dy*0.5, head_width=0.2, color='red')
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Local Patch + Drone Direction")
+
+    plt.tight_layout()
+    plt.show()

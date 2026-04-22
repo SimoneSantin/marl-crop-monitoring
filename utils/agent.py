@@ -21,27 +21,29 @@ class Agent:
         ) / self.num_classes
 
 
-    def update_belief_patch(self, sensor_patch, alignment_patch, gamma):
-        """
-        sensor_patch: np.array shape (9, num_classes)
-        alignment_patch: np.array shape (9,)
-        """
+    def update_belief_patch(self, sensor_patch, alignment_patch, confidence_patch=None, gamma=3.0):
         x, y = self.env.agent_pos[self.agent_id]
 
         idx = 0
-        for i in range(-1, 2):
-            for j in range(-1, 2):
-                nx, ny = x + i, y + j
+        for dx in range(-1, 2):
+            for dy in range(-1, 2):
+                nx, ny = x + dx, y + dy
 
                 if 0 <= nx < self.env.field_size and 0 <= ny < self.env.field_size:
                     prior = self.belief_map[nx, ny].copy()
-                    sensor_dist = sensor_patch[idx]
-                    alignment = float(np.clip(alignment_patch[idx], 0.0, 1.0))
+                    likelihood = sensor_patch[idx]
 
-                    # reliability alta se alignment alto
-                    reliability = alignment ** gamma
+                    alignment = float(alignment_patch[idx])
 
-                    posterior = prior * sensor_dist
+                    if confidence_patch is None:
+                        confidence = 1.0
+                    else:
+                        confidence = float(confidence_patch[idx])
+
+                    reliability = (alignment ** gamma) * confidence
+                    reliability = np.clip(reliability, 0.0, 1.0)
+
+                    posterior = prior * likelihood
                     posterior /= (posterior.sum() + 1e-9)
 
                     updated = (1.0 - reliability) * prior + reliability * posterior
@@ -49,9 +51,7 @@ class Agent:
 
                     self.belief_map[nx, ny] = updated
 
-
                 idx += 1
-
 
     def choose_action(self, obs):
 
