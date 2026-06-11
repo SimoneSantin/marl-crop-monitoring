@@ -339,7 +339,7 @@ class CustomMapEnv(gym.Env):
         for agent_id, action in enumerate(actions):
 
             x, y = self.agent_pos[agent_id]
-
+            
             dx, dy = 0, 0
 
             if action == 0:   # UP

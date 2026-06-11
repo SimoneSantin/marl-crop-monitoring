@@ -8,7 +8,7 @@ from LSTM.lstm_model import NetObsReliability
 
 class MAPPOTrainer:
     def __init__(self, env, planner, num_episodes, reward_weights,
-                 reliability_model_path="./LSTM/models/patch_reliability_model.pth",
+                 reliability_model_path="./LSTM/models/patch_reliability_model2.pth",
                  reliability_seq_len=5,
                  reliability_hidden_size=128,
                  reliability_num_layers=1):
@@ -40,7 +40,7 @@ class MAPPOTrainer:
         ).to(self.device)
 
         self.reliability_model.load_state_dict(
-            torch.load(reliability_model_path, map_location=self.device)
+            torch.load("./LSTM/models/patch_reliability_model2.pth", map_location=self.device)
         )
         self.reliability_model.eval()
 
@@ -55,7 +55,7 @@ class MAPPOTrainer:
             for _ in range(self.env.num_agents)
         ]
 
-    def build_reliability_step_feature(self, obs_i):
+    def build_reliability_step_feature(self, obs_i, movement):
         """
         raw obs attuale:
         [alignment_patch (9) | sensor_patch_flat (9 * COUNT_MARKER)]
@@ -70,6 +70,7 @@ class MAPPOTrainer:
         sensor_patch_flat = obs_i[sensor_start:sensor_end].astype(np.float32)
 
         step_feature = np.concatenate([
+            movement.astype(np.float32),
             alignment_patch,
             sensor_patch_flat
         ]).astype(np.float32)
@@ -93,6 +94,28 @@ class MAPPOTrainer:
             confidence_patch = outputs["pred_confidence_patch"][0].cpu().numpy()  # (9,)
 
         return confidence_patch.astype(np.float32)
+    
+    def compute_global_accuracy(self):
+        return float(np.mean([
+            agent.compute_accuracy()
+            for agent in self.planner.agents
+        ]))
+
+
+    def compute_visited_accuracy(self):
+        visited = self.env.visited_mask.astype(bool)
+
+        if visited.sum() == 0:
+            return 0.0
+
+        true_map = self.env.grid_counts
+        accs = []
+
+        for agent in self.planner.agents:
+            pred_map = agent.get_prediction_map()
+            accs.append((pred_map[visited] == true_map[visited]).mean())
+
+        return float(np.mean(accs))
 
     def train(self):
         alignment_history = []
@@ -101,7 +124,7 @@ class MAPPOTrainer:
         episode_lengths = []
         collisions_history = []
         terms_history = []
-
+        visited_accuracy_history = []
         checkpoint_episodes = [0] + sorted(set([
             max(0, int((k + 1) * self.num_episodes / 4) - 1)
             for k in range(4)
@@ -172,7 +195,30 @@ class MAPPOTrainer:
                     )
 
                     action, log_prob = agent.choose_action(enriched_obs)
+                    
+                    x, y = self.env.agent_pos[agent_id]
+                    
+                    dx, dy = 0, 0
+                    if action == 0:   # UP
+                        x_new = max(0, x - 1)
+                        y_new = y
+                        dx = -1
 
+                    elif action == 1: # DOWN
+                        x_new = min(self.env.field_size - 1, x + 1)
+                        y_new = y
+                        dx = 1
+
+                    elif action == 2: # LEFT
+                        x_new = x
+                        y_new = max(0, y - 1)
+                        dy = -1
+
+                    elif action == 3: # RIGHT
+                        x_new = x
+                        y_new = min(self.env.field_size - 1, y + 1)
+                        dy = 1
+                    agent.last_movement = np.array([dx, dy], dtype=np.float32)
                     actions.append(action)
                     log_probs.append(log_prob)
                     current_obs_for_buffer.append(enriched_obs)
@@ -214,14 +260,14 @@ class MAPPOTrainer:
                     sensor_patch = sensor_patch_flat.reshape(9, COUNT_MARKER)
 
                     # reliability model
-                    step_feature = self.build_reliability_step_feature(obs_i)
+                    step_feature = self.build_reliability_step_feature(obs_i, movement=np.array(agent.last_movement))
                     confidence_patch = self.predict_patch_confidence(i, step_feature)
-
+                    #print(f"confidence mean: {confidence_patch.mean():.3f}, min: {confidence_patch.min():.3f}, max: {confidence_patch.max():.3f}")
                     # belief update
                     agent.update_belief_patch(
                         sensor_patch=sensor_patch,
                         alignment_patch=alignment_patch,
-                        confidence_patch=confidence_patch,
+                        confidence_patch=None,
                         gamma=3.0
                     )
 
@@ -308,10 +354,11 @@ class MAPPOTrainer:
             if track_accuracy_this_episode:
                 episode_accuracy_traces[episode] = episode_accuracy_trace
 
-            final_accuracy = np.mean(
-                [agent.compute_accuracy() for agent in self.planner.agents]
-            )
+            final_accuracy = self.compute_global_accuracy()
+            final_visited_accuracy = self.compute_visited_accuracy()
+
             self.accuracy_history.append(final_accuracy)
+            visited_accuracy_history.append(final_visited_accuracy)
 
             rewards_history.append(episode_reward)
             alignment_history.append(episode_alignment / max(steps, 1))
@@ -326,6 +373,7 @@ class MAPPOTrainer:
             "collisions": collisions_history,
             "episode_paths": self.last_episode_paths,
             "accuracy": self.accuracy_history,
+            "visited_accuracy": visited_accuracy_history,
             "terms": terms_history,
             "alignment": alignment_history,
             "accuracy_traces": episode_accuracy_traces

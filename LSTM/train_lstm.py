@@ -93,7 +93,7 @@ def train_patch_reliability():
 
     os.makedirs(save_dir, exist_ok=True)
 
-    save_path = os.path.join(save_dir, "patch_reliability_model.pth")
+    save_path = os.path.join(save_dir, "patch_reliability_model2.pth")
     torch.save(model.state_dict(), save_path)
 
     print(f"Model saved: {save_path}")

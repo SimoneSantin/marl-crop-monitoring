@@ -66,7 +66,8 @@ class Actor(nn.Module):
 
         x, h = self.lstm(combined, h)
         logits = self.fc_out(x)
-
+        logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+        logits = torch.clamp(logits, -20, 20)
         return logits, h
 
 class Critic(nn.Module):
@@ -262,7 +263,7 @@ class MAPPOPlannerMultiAgent:
         )
 
         logits = logits.squeeze(0).squeeze(0)
-
+        logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
         dist = Categorical(logits=logits)
         action = dist.sample()
         log_prob = dist.log_prob(action)
@@ -349,7 +350,11 @@ class MAPPOPlannerMultiAgent:
                 
             raw_adv = self.compute_gae(rewards, values, dones)
             returns = raw_adv + values
-            adv = (raw_adv - raw_adv.mean()) / (raw_adv.std() + 1e-8)
+            std = raw_adv.std()
+            std = torch.clamp(std, min=1e-5)
+            adv = (raw_adv - raw_adv.mean()) / std
+            adv = torch.clamp(adv, -5.0, 5.0)
+            
 
             T = obs.size(0)
             for start in range(0, T, self.chunk_len):
@@ -453,7 +458,7 @@ class MAPPOPlannerMultiAgent:
                     torch.zeros(1, batch_size, self.hidden_dim)
                 )
                 values_pred, _ = self.critic(global_states_batch, h0_v)
-
+                values_pred = torch.nan_to_num(values_pred, nan=0.0, posinf=1e3, neginf=-1e3)
                 critic_loss = F.smooth_l1_loss(
                     values_pred[mask_batch],
                     returns_batch[mask_batch].detach()
@@ -461,7 +466,7 @@ class MAPPOPlannerMultiAgent:
 
                 self.critic_optimizer.zero_grad()
                 critic_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 10.0)
+                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
                 self.critic_optimizer.step()
 
                 # -------------------------
@@ -478,6 +483,8 @@ class MAPPOPlannerMultiAgent:
                 entropy = dist.entropy()                       # (B, L)
 
                 ratio = torch.exp(new_log_probs - old_log_probs_batch)
+                ratio = torch.nan_to_num(ratio, nan=1.0, posinf=1.0, neginf=1.0)
+                ratio = torch.clamp(ratio, 0.0, 10.0)
 
                 surr1 = ratio * adv_batch.detach()
                 surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * adv_batch.detach()
@@ -488,10 +495,10 @@ class MAPPOPlannerMultiAgent:
                 entropy_loss = entropy[mask_batch].mean()
 
                 total_actor_loss = actor_loss - 0.01 * entropy_loss
-
+                total_actor_loss = torch.nan_to_num(total_actor_loss, nan=0.0)
                 self.actor_optimizer.zero_grad()
                 total_actor_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 10.0)
+                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
                 self.actor_optimizer.step()
 
         self.buffer = []

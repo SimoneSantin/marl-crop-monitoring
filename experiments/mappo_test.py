@@ -14,9 +14,9 @@ from utils.constants import COUNT_MARKER
 
 
 class MAPPOTest:
-    def __init__(self, config_path=None):
+    def __init__(self, config_path=None, config=None):
         self.config_path = config_path
-        self.config = None
+        self.config = config
         self.run_dir = None
         self.plots_dir = None
         self.models_dir = None
@@ -29,11 +29,11 @@ class MAPPOTest:
     def build_default_config(self):
         return {
             "algorithm": "MAPPO",
-            "experiment_name": "LSTM_Reliability_Test2",
+            "experiment_name": "FINALMAPPO4",
             "env": {
                 "field_size": 40,
                 "num_agents": 3,
-                "max_steps": 1
+                "max_steps": 2000
             },
             "reward": {
                 "type": "best_reward",
@@ -47,7 +47,7 @@ class MAPPOTest:
                 "accuracy_weight": 1.0
             },
             "training": {
-                "num_episodes": 1,
+                "num_episodes": 500,
                 "lr": 5e-05,
                 "gamma": 0.99,
                 "clip_eps": 0.1,
@@ -76,7 +76,7 @@ class MAPPOTest:
 
         run_name = f"{algo}_{exp_name}_fs{field_size}_agents{num_agents}_{reward_type}_{timestamp}"
 
-        self.run_dir = os.path.join("results", run_name)
+        self.run_dir = os.path.join("results2", run_name)
         self.plots_dir = os.path.join(self.run_dir, "plots")
         self.models_dir = os.path.join(self.run_dir, "models")
 
@@ -89,85 +89,92 @@ class MAPPOTest:
         return np.convolve(data, np.ones(window) / window, mode="valid")
 
     def plot_training(self, metrics):
+        import os
+        import numpy as np
+        import matplotlib.pyplot as plt
+
         rewards = metrics["rewards"]
         coverage = metrics["coverage"]
         lengths = metrics["lengths"]
         collisions = metrics["collisions"]
         accuracy = metrics["accuracy"]
-        alignment = metrics["alignment"]
+        visited_accuracy = metrics.get("visited_accuracy", None)
         accuracy_traces = metrics["accuracy_traces"]
 
-        #check metriche
-        terms = metrics["terms"]
-        collisions_terms = [t["collisions"] for t in terms]
-        alignment_terms = [t["alignment"] for t in terms]
-        accuracy_terms = [t["accuracy"] for t in terms]
-  
+        os.makedirs(self.plots_dir, exist_ok=True)
 
+        # 1. Final accuracy per episode
         plt.figure()
-        plt.plot(alignment, alpha=0.3, label="alignment")
-        ma = self.moving_average(alignment)
+        plt.plot(accuracy, alpha=0.35, label="global accuracy")
+        ma = self.moving_average(accuracy)
         plt.plot(range(len(ma)), ma, label="moving avg")
-        plt.title("Episode Alignment")
+        plt.title("Global Accuracy per Episode")
         plt.xlabel("Episode")
-        plt.ylabel("Alignment")
+        plt.ylabel("Accuracy")
         plt.legend()
-        plt.savefig(os.path.join(self.plots_dir, "alignment_plot.png"))
-        plt.close()
-        plt.figure()
-
-        plt.plot(rewards, alpha=0.3, label="reward")
-        ma = self.moving_average(rewards)
-        plt.plot(range(len(ma)), ma, label="moving avg")
-        plt.title("Episode Reward")
-        plt.xlabel("Episode")
-        plt.ylabel("Reward")
-        plt.legend()
-        plt.savefig(os.path.join(self.plots_dir, "reward_plot.png"))
+        plt.savefig(os.path.join(self.plots_dir, "global_accuracy_per_episode.png"))
         plt.close()
 
+        # 2. Visited accuracy per episode
+        if visited_accuracy is not None:
+            plt.figure()
+            plt.plot(visited_accuracy, alpha=0.35, label="visited accuracy")
+            ma = self.moving_average(visited_accuracy)
+            plt.plot(range(len(ma)), ma, label="moving avg")
+            plt.title("Visited-Cell Accuracy per Episode")
+            plt.xlabel("Episode")
+            plt.ylabel("Accuracy")
+            plt.legend()
+            plt.savefig(os.path.join(self.plots_dir, "visited_accuracy_per_episode.png"))
+            plt.close()
+
+        # 3. Global vs visited accuracy
+        if visited_accuracy is not None:
+            plt.figure()
+            plt.plot(accuracy, alpha=0.35, label="global accuracy")
+            plt.plot(visited_accuracy, alpha=0.35, label="visited accuracy")
+            plt.title("Global Accuracy vs Visited-Cell Accuracy")
+            plt.xlabel("Episode")
+            plt.ylabel("Accuracy")
+            plt.legend()
+            plt.savefig(os.path.join(self.plots_dir, "global_vs_visited_accuracy.png"))
+            plt.close()
+
+        # 4. Coverage per episode
         plt.figure()
-        plt.plot(coverage, alpha=0.3, label="coverage")
+        plt.plot(coverage, alpha=0.35, label="coverage")
         ma = self.moving_average(coverage)
         plt.plot(range(len(ma)), ma, label="moving avg")
-        plt.title("Map Coverage")
+        plt.title("Coverage per Episode")
         plt.xlabel("Episode")
         plt.ylabel("Visited ratio")
-        plt.savefig(os.path.join(self.plots_dir, "coverage_plot.png"))
+        plt.legend()
+        plt.savefig(os.path.join(self.plots_dir, "coverage_per_episode.png"))
         plt.close()
 
+        # 5. Collisions per episode
         plt.figure()
-        plt.plot(lengths, alpha=0.3, label="lengths")
-        ma = self.moving_average(lengths)
-        plt.plot(range(len(ma)), ma, label="moving avg")
-        plt.title("Episode Length")
-        plt.xlabel("Episode")
-        plt.ylabel("Steps")
-        plt.savefig(os.path.join(self.plots_dir, "episode_length_plot.png"))
-        plt.close()
-
-        plt.figure()
-        plt.plot(collisions, alpha=0.3, label="collisions")
+        plt.plot(collisions, alpha=0.35, label="collisions")
         ma = self.moving_average(collisions)
         plt.plot(range(len(ma)), ma, label="moving avg")
         plt.title("Collisions per Episode")
         plt.xlabel("Episode")
         plt.ylabel("Collisions")
-        plt.savefig(os.path.join(self.plots_dir, "collisions_plot.png"))
+        plt.legend()
+        plt.savefig(os.path.join(self.plots_dir, "collisions_per_episode.png"))
         plt.close()
 
+        # 6. Accuracy at equal coverage
         plt.figure()
-        plt.plot(accuracy, alpha=0.3, label="accuracy")
-        ma = self.moving_average(accuracy)
-        plt.plot(range(len(ma)), ma, label="moving avg")
-        plt.title("Accuracy per Episode")
-        plt.xlabel("Episode")
-        plt.ylabel("Accuracy")
-        plt.savefig(os.path.join(self.plots_dir, "accuracy_plot.png"))
+        plt.scatter(coverage, accuracy, s=12, alpha=0.5)
+        plt.title("Accuracy at Equal Coverage")
+        plt.xlabel("Coverage")
+        plt.ylabel("Global accuracy")
+        plt.savefig(os.path.join(self.plots_dir, "accuracy_vs_coverage.png"))
         plt.close()
 
+        # 7. Accuracy traces during selected episodes
         plt.figure()
-
         for episode, trace in accuracy_traces.items():
             steps = np.arange(len(trace))
             plt.plot(steps, trace, label=f"episode {episode}")
@@ -179,6 +186,60 @@ class MAPPOTest:
         plt.savefig(os.path.join(self.plots_dir, "accuracy_traces.png"))
         plt.close()
 
+        # 8. AUC accuracy during selected episodes
+        auc_values = {}
+        for episode, trace in accuracy_traces.items():
+            trace = np.asarray(trace, dtype=np.float32)
+            if len(trace) > 1:
+                auc_values[episode] = np.trapz(trace) / (len(trace) - 1)
+            else:
+                auc_values[episode] = np.nan
+
+        if len(auc_values) > 0:
+            plt.figure()
+            episodes = list(auc_values.keys())
+            aucs = list(auc_values.values())
+            plt.bar([str(e) for e in episodes], aucs)
+            plt.title("Accuracy AUC During Selected Episodes")
+            plt.xlabel("Episode")
+            plt.ylabel("AUC")
+            plt.savefig(os.path.join(self.plots_dir, "accuracy_auc_selected_episodes.png"))
+            plt.close()
+
+        # 9. Episodes needed to reach target accuracy
+        thresholds = [0.75, 0.80]
+        reached = []
+
+        for threshold in thresholds:
+            acc_arr = np.asarray(accuracy, dtype=np.float32)
+            idx = np.where(acc_arr >= threshold)[0]
+
+            if len(idx) > 0:
+                reached.append(idx[0])
+            else:
+                reached.append(np.nan)
+
+        plt.figure()
+        plt.bar([str(t) for t in thresholds], reached)
+        plt.title("Episodes Needed to Reach Target Accuracy")
+        plt.xlabel("Target accuracy")
+        plt.ylabel("Episode")
+        plt.savefig(os.path.join(self.plots_dir, "episodes_to_target_accuracy.png"))
+        plt.close()
+
+        # 10. Episode length
+        plt.figure()
+        plt.plot(lengths, alpha=0.35, label="episode length")
+        ma = self.moving_average(lengths)
+        plt.plot(range(len(ma)), ma, label="moving avg")
+        plt.title("Episode Length")
+        plt.xlabel("Episode")
+        plt.ylabel("Steps")
+        plt.legend()
+        plt.savefig(os.path.join(self.plots_dir, "episode_length.png"))
+        plt.close()
+
+        # 11. Agent trajectories
         plt.figure(figsize=(6, 6))
         for i, path in enumerate(metrics["episode_paths"]):
             xs = [p[1] for p in path]
@@ -195,19 +256,6 @@ class MAPPOTest:
         plt.savefig(os.path.join(self.plots_dir, "agent_trajectories.png"))
         plt.close()
 
-        plt.figure()
-
-        plt.plot(self.moving_average(collisions_terms), label="collisions")
-        plt.plot(self.moving_average(alignment_terms), label="alignment")
-        plt.plot(self.moving_average(accuracy_terms), label="accuracy")
-
-        plt.title("Reward Terms Contribution (Smoothed)")
-        plt.xlabel("Episode")
-        plt.ylabel("Average contribution per step")
-        plt.legend()
-
-        plt.savefig(os.path.join(self.plots_dir, "reward_terms_plot.png"))
-        plt.close()
         print(f"Plots saved in {self.plots_dir}")
 
     def save_models(self):
@@ -237,8 +285,9 @@ class MAPPOTest:
             algorithm=self.config["algorithm"]
         )
 
-        self.env.reset()
-
+        self.env.reset(
+            seed=self.config.get("env_seed", None)
+        )
         obs_dim = self.env.obs_dim
         action_dim = self.env.action_space.n
         num_agents = self.env.num_agents
@@ -276,12 +325,19 @@ class MAPPOTest:
                 "accuracy": reward_cfg["accuracy_weight"]
             }
         )
-
-    def run(self):
-        if self.config_path is not None:
+        
+    def run(self, env_seed=None):
+        if self.config is not None:
+            pass
+        elif self.config_path is not None:
             self.load_config(self.config_path)
         else:
             self.config = self.build_default_config()
+
+        if env_seed is not None:
+            np.random.seed(env_seed)
+            torch.manual_seed(env_seed)
+            self.config["env_seed"] = env_seed
 
         self.create_run_dir()
         self.save_config()
@@ -291,6 +347,7 @@ class MAPPOTest:
         self.plot_training(metrics)
         self.save_models()
 
+        return metrics
 
 def main():
     experiment = MAPPOTest(config_path=None)
