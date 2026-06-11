@@ -32,13 +32,13 @@ from experiments.mappo_test import MAPPOTest
 ENV_SEEDS    = [42, 123, 456]
 NUM_EPISODES = 500  # riduci a 200 per test rapidi
 
-def build_config(experiment_name, use_belief=True, use_gf=True,
+def build_config(experiment_name, use_belief=True, use_gaussian=True,
                  use_lstm=True, use_random=False):
     return {
         "algorithm":         "MAPPO",
         "experiment_name":   experiment_name,
         "use_belief":        use_belief,
-        "use_gf":            use_gf,
+        "use_gaussian":      use_gaussian,
         "use_lstm":          use_lstm,
         "use_random_policy": use_random,
         "env": {
@@ -69,25 +69,25 @@ def build_config(experiment_name, use_belief=True, use_gf=True,
 
 ALL_CONFIGS = {
     "1_random_policy":   build_config("random_policy",
-                                      use_belief=False, use_gf=False,
+                                      use_belief=False, use_gaussian=False,
                                       use_lstm=False, use_random=True),
     "2_mappo_no_belief": build_config("mappo_no_belief",
-                                      use_belief=False, use_gf=False,
+                                      use_belief=False, use_gaussian=False,
                                       use_lstm=False),
     "3_mappo_bayesian":  build_config("mappo_bayesian",
-                                      use_belief=True, use_gf=False,
+                                      use_belief=True,  use_gaussian=False,
                                       use_lstm=False),
     "4_mappo_bayes_gf":  build_config("mappo_bayes_gf",
-                                      use_belief=True, use_gf=True,
+                                      use_belief=True,  use_gaussian=True,
                                       use_lstm=False),
     "5_mappo_lstm":      build_config("mappo_lstm",
-                                      use_belief=True, use_gf=False,
+                                      use_belief=True,  use_gaussian=False,
                                       use_lstm=True),
     "6_mappo_gf_lstm":   build_config("mappo_gf_lstm",
-                                      use_belief=True, use_gf=True,
+                                      use_belief=True,  use_gaussian=True,
                                       use_lstm=True),
     "7_oracle_conf":     build_config("oracle_confidence",
-                                      use_belief=True, use_gf=False,
+                                      use_belief=True,  use_gaussian=False,
                                       use_lstm=False),
 }
 
@@ -145,16 +145,13 @@ def save_results(config_name, env_seed, metrics):
         "coverage_history":   [float(x) for x in cov_hist],
         "collisions_history": [float(x) for x in col_hist],
         "alignment_history":  [float(x) for x in metrics.get("alignment", [])],
+        "accuracy_visited_history": [
+            float(x) for x in metrics.get("visited_accuracy", [])
+        ],
+        "accuracy_unvisited_history": [
+            float(x) for x in metrics.get("unvisited_accuracy", [])  
+        ],
     }
-
-    if "visited_accuracy" in metrics:
-        results["accuracy_visited_history"] = [
-            float(x) for x in metrics["visited_accuracy"]
-        ]
-    if "accuracy" in metrics:
-        results["accuracy_unvisited_history"] = [
-            float(x) for x in metrics["accuracy"]
-        ]
 
     with open(save_path, "w") as f:
         json.dump(results, f, indent=2)
@@ -174,16 +171,16 @@ def print_status(config_name, env_seed,
                  total_missing, done_so_far,
                  start_time):
     elapsed = time.time() - start_time
-    avg_per_run = elapsed / max(done_so_far, 1)
-    remaining   = (total_missing - done_so_far) * avg_per_run
-
     print(f"\n{'='*60}")
     print(f"Config {config_idx}/{total_configs}: {config_name}")
     print(f"Seed: {env_seed}")
     print(f"Completate: {done_so_far}/{total_missing}")
-    print(f"Tempo trascorso:  {elapsed/3600:.1f}h")
+    print(f"Tempo trascorso: {elapsed/3600:.1f}h")
     if done_so_far > 0:
+        avg_per_run = elapsed / done_so_far
+        remaining   = (total_missing - done_so_far) * avg_per_run
         print(f"Tempo stimato rimasto: {remaining/3600:.1f}h")
+        print(f"Tempo medio per run:   {avg_per_run/3600:.1f}h")
     print(f"{'='*60}")
 
 # ─────────────────────────────────────────────
@@ -310,6 +307,11 @@ if __name__ == "__main__":
         "--list",
         action="store_true",
         help="Mostra le configurazioni disponibili ed esci"
+    )
+    parser.add_argument(
+    "--force",
+    action="store_true",
+    help="Riesegui anche le run gia completate"
     )
     args = parser.parse_args()
 

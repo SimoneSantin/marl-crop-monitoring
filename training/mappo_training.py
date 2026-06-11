@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import torch
 from collections import deque
@@ -7,8 +9,8 @@ from LSTM.lstm_model import NetObsReliability
 
 
 class MAPPOTrainer:
-    def __init__(self, env, planner, num_episodes, reward_weights,
-                 reliability_model_path="./LSTM/models/patch_reliability_model2.pth",
+    def __init__(self, env, planner, num_episodes, reward_weights, config,
+                 reliability_model_path="./LSTM/models/patch_reliability_model.pth",
                  reliability_seq_len=5,
                  reliability_hidden_size=128,
                  reliability_num_layers=1):
@@ -16,7 +18,7 @@ class MAPPOTrainer:
         self.planner = planner
         self.num_episodes = num_episodes
         self.reward_weights = reward_weights
-
+        self.config = config
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self.episode_accuracy_traces = {}
@@ -40,7 +42,7 @@ class MAPPOTrainer:
         ).to(self.device)
 
         self.reliability_model.load_state_dict(
-            torch.load("./LSTM/models/patch_reliability_model2.pth", map_location=self.device)
+            torch.load(reliability_model_path, map_location=self.device)
         )
         self.reliability_model.eval()
 
@@ -70,7 +72,6 @@ class MAPPOTrainer:
         sensor_patch_flat = obs_i[sensor_start:sensor_end].astype(np.float32)
 
         step_feature = np.concatenate([
-            movement.astype(np.float32),
             alignment_patch,
             sensor_patch_flat
         ]).astype(np.float32)
@@ -117,6 +118,19 @@ class MAPPOTrainer:
 
         return float(np.mean(accs))
 
+    def compute_unvisited_accuracy(self):
+        unvisited = ~self.env.visited_mask.astype(bool)
+        if unvisited.sum() == 0:
+            return 0.0
+        true_map = self.env.grid_counts
+        accs = []
+        for agent in self.planner.agents:
+            pred_map = agent.get_prediction_map()
+            accs.append(
+                (pred_map[unvisited] == true_map[unvisited]).mean()
+            )
+        return float(np.mean(accs))
+    
     def train(self):
         alignment_history = []
         rewards_history = []
@@ -125,6 +139,7 @@ class MAPPOTrainer:
         collisions_history = []
         terms_history = []
         visited_accuracy_history = []
+        unvisited_accuracy_history = []
         checkpoint_episodes = [0] + sorted(set([
             max(0, int((k + 1) * self.num_episodes / 4) - 1)
             for k in range(4)
@@ -196,33 +211,9 @@ class MAPPOTrainer:
 
                     action, log_prob = agent.choose_action(enriched_obs)
                     
-                    x, y = self.env.agent_pos[agent_id]
-                    
-                    dx, dy = 0, 0
-                    if action == 0:   # UP
-                        x_new = max(0, x - 1)
-                        y_new = y
-                        dx = -1
-
-                    elif action == 1: # DOWN
-                        x_new = min(self.env.field_size - 1, x + 1)
-                        y_new = y
-                        dx = 1
-
-                    elif action == 2: # LEFT
-                        x_new = x
-                        y_new = max(0, y - 1)
-                        dy = -1
-
-                    elif action == 3: # RIGHT
-                        x_new = x
-                        y_new = min(self.env.field_size - 1, y + 1)
-                        dy = 1
-                    agent.last_movement = np.array([dx, dy], dtype=np.float32)
                     actions.append(action)
                     log_probs.append(log_prob)
                     current_obs_for_buffer.append(enriched_obs)
-
                 # -------------------------
                 # 2. Env step
                 # -------------------------
@@ -244,7 +235,7 @@ class MAPPOTrainer:
                         for dy in range(-1, 2):
                             nx, ny = x + dx, y + dy
                             if 0 <= nx < self.env.field_size and 0 <= ny < self.env.field_size:
-                                old_beliefs.append(agent.belief_map[nx, ny].copy())
+                                old_beliefs.append(agent.belief_map[nx, ny].cpu().numpy().copy())
 
                     # parse raw obs
                     obs_i = next_obs[i]
@@ -259,18 +250,21 @@ class MAPPOTrainer:
                     sensor_patch_flat = obs_i[sensor_start:sensor_end]
                     sensor_patch = sensor_patch_flat.reshape(9, COUNT_MARKER)
 
-                    # reliability model
-                    step_feature = self.build_reliability_step_feature(obs_i, movement=np.array(agent.last_movement))
-                    confidence_patch = self.predict_patch_confidence(i, step_feature)
-                    #print(f"confidence mean: {confidence_patch.mean():.3f}, min: {confidence_patch.min():.3f}, max: {confidence_patch.max():.3f}")
-                    # belief update
+                    if self.config.get("use_lstm", False):
+                        step_feature     = self.build_reliability_step_feature(
+                            obs_i, movement=np.array(agent.last_movement)
+                        )
+                        confidence_patch = self.predict_patch_confidence(i, step_feature)
+                    else:
+                        confidence_patch = None
+               
                     agent.update_belief_patch(
-                        sensor_patch=sensor_patch,
-                        alignment_patch=alignment_patch,
-                        confidence_patch=None,
-                        gamma=3.0
+                        sensor_patch     = sensor_patch,
+                        alignment_patch  = alignment_patch,
+                        confidence_patch = confidence_patch,
+                        gamma            = 3.0
                     )
-
+                   
                     # CE gain medio sulla patch
                     ce_gains = []
                     old_idx = 0
@@ -280,7 +274,7 @@ class MAPPOTrainer:
                             nx, ny = x + dx, y + dy
                             if 0 <= nx < self.env.field_size and 0 <= ny < self.env.field_size:
                                 old_belief = old_beliefs[old_idx]
-                                new_belief = agent.belief_map[nx, ny]
+                                new_belief = agent.belief_map[nx, ny].cpu().numpy()
 
                                 true_class = self.env.grid_counts[nx, ny]
 
@@ -296,6 +290,7 @@ class MAPPOTrainer:
                     local_info_bonus = self.reward_weights["accuracy"] * patch_ce_gain
                     local_accuracy_bonus_per_agent.append(local_info_bonus)
 
+    
                 shaped_rewards = [
                     rewards[i] + local_accuracy_bonus_per_agent[i]
                     for i in range(self.env.num_agents)
@@ -356,7 +351,9 @@ class MAPPOTrainer:
 
             final_accuracy = self.compute_global_accuracy()
             final_visited_accuracy = self.compute_visited_accuracy()
+            final_unvisited_accuracy = self.compute_unvisited_accuracy()
 
+            unvisited_accuracy_history.append(final_unvisited_accuracy)
             self.accuracy_history.append(final_accuracy)
             visited_accuracy_history.append(final_visited_accuracy)
 
@@ -374,6 +371,7 @@ class MAPPOTrainer:
             "episode_paths": self.last_episode_paths,
             "accuracy": self.accuracy_history,
             "visited_accuracy": visited_accuracy_history,
+            "unvisited_accuracy": unvisited_accuracy_history,
             "terms": terms_history,
             "alignment": alignment_history,
             "accuracy_traces": episode_accuracy_traces
@@ -391,7 +389,7 @@ class MAPPOTrainer:
                 nx, ny = x + i, y + j
 
                 if 0 <= nx < self.env.field_size and 0 <= ny < self.env.field_size:
-                    belief = agent.belief_map[nx, ny]
+                    belief = agent.belief_map[nx, ny].cpu().numpy()
                     entropy = -np.sum(belief * np.log(belief + 1e-9))
                     entropy /= np.log(agent.num_classes)
                     entropy_patch[px, py] = entropy
@@ -438,13 +436,16 @@ class MAPPOTrainer:
         return coarse.flatten().astype(np.float32)
 
     def compute_shared_uncertainty_map(self):
-        beliefs = np.stack(
+        # stack direttamente in torch senza passare per numpy
+        beliefs = torch.stack(
             [agent.belief_map for agent in self.planner.agents],
-            axis=0
-        )  # shape: (N, H, W, C)
+            dim=0
+        )  # (N, H, W, C)
 
-        entropy = -np.sum(beliefs * np.log(beliefs + 1e-9), axis=-1)
-        entropy /= np.log(self.planner.agents[0].num_classes)
+        entropy = -torch.sum(
+            beliefs * torch.log(beliefs + 1e-9), dim=-1
+        )  # (N, H, W)
+        entropy = entropy / np.log(self.planner.agents[0].num_classes)
+        shared  = entropy.mean(dim=0)  # (H, W)
 
-        shared_uncertainty = np.mean(entropy, axis=0).astype(np.float32)
-        return shared_uncertainty
+        return shared.cpu().numpy().astype(np.float32)

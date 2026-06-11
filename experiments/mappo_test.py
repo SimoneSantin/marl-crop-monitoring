@@ -99,6 +99,7 @@ class MAPPOTest:
         collisions = metrics["collisions"]
         accuracy = metrics["accuracy"]
         visited_accuracy = metrics.get("visited_accuracy", None)
+        unvisited_accuracy = metrics.get("unvisited_accuracy", None)
         accuracy_traces = metrics["accuracy_traces"]
 
         os.makedirs(self.plots_dir, exist_ok=True)
@@ -256,6 +257,33 @@ class MAPPOTest:
         plt.savefig(os.path.join(self.plots_dir, "agent_trajectories.png"))
         plt.close()
 
+        # grafico unvisited accuracy
+        if unvisited_accuracy is not None:
+            plt.figure()
+            plt.plot(unvisited_accuracy, alpha=0.35, label="unvisited accuracy")
+            ma = self.moving_average(unvisited_accuracy)
+            plt.plot(range(len(ma)), ma, label="moving avg")
+            plt.title("Unvisited-Cell Accuracy per Episode")
+            plt.xlabel("Episode")
+            plt.ylabel("Accuracy")
+            plt.legend()
+            plt.savefig(os.path.join(self.plots_dir, "unvisited_accuracy_per_episode.png"))
+            plt.close()
+
+        # grafico tutte e tre le accuracy insieme
+        if visited_accuracy is not None and unvisited_accuracy is not None:
+            plt.figure()
+            plt.plot(accuracy,            alpha=0.35, label="global accuracy")
+            plt.plot(visited_accuracy,    alpha=0.35, label="visited accuracy")
+            plt.plot(unvisited_accuracy,  alpha=0.35, label="unvisited accuracy")
+            plt.title("Global vs Visited vs Unvisited Accuracy")
+            plt.xlabel("Episode")
+            plt.ylabel("Accuracy")
+            plt.legend()
+            plt.savefig(os.path.join(
+                self.plots_dir, "global_vs_visited_vs_unvisited_accuracy.png"
+            ))
+            plt.close()
         print(f"Plots saved in {self.plots_dir}")
 
     def save_models(self):
@@ -291,9 +319,11 @@ class MAPPOTest:
         obs_dim = self.env.obs_dim
         action_dim = self.env.action_space.n
         num_agents = self.env.num_agents
-
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        use_gaussian = self.config.get("use_gaussian", False)
+        use_lstm     = self.config.get("use_lstm",     False)
         self.agents = [
-            Agent(self.env, COUNT_MARKER, agent_id=i, planner=None)
+            Agent(self.env, COUNT_MARKER, agent_id=i, planner=None, device=device, use_gaussian=use_gaussian, use_lstm=use_lstm)
             for i in range(num_agents)
         ]
 
@@ -323,7 +353,8 @@ class MAPPOTest:
             num_episodes=train_cfg["num_episodes"],
             reward_weights={
                 "accuracy": reward_cfg["accuracy_weight"]
-            }
+            },
+            config=self.config
         )
         
     def run(self, env_seed=None):

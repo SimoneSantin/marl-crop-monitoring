@@ -17,7 +17,7 @@ class NetObsReliability(nn.Module):
         self.num_classes = num_classes
         self.patch_cells = 9
         self.movement = 2
-        self.input_size = self.patch_cells + self.patch_cells * num_classes + self.movement
+        self.input_size = self.patch_cells + self.patch_cells * num_classes 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
 
