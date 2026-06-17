@@ -225,7 +225,7 @@ class MAPPOTrainer:
                 # -------------------------
                 local_accuracy_bonus_per_agent = []
 
-                for i, agent in enumerate(self.planner.agents):
+                """for i, agent in enumerate(self.planner.agents):
                     x, y = self.env.agent_pos[i]
 
                     # salva belief della patch prima dell'update
@@ -263,9 +263,82 @@ class MAPPOTrainer:
                         alignment_patch  = alignment_patch,
                         confidence_patch = confidence_patch,
                         gamma            = 3.0
-                    )
-                   
-                    # CE gain medio sulla patch
+                    )"""
+                for i, agent in enumerate(self.planner.agents):
+                    x, y = self.env.agent_pos[i]
+
+                    # salva old beliefs
+                    old_beliefs = []
+                    if self.config.get("use_belief", True):
+                        for dx in range(-1, 2):
+                            for dy in range(-1, 2):
+                                nx, ny = x + dx, y + dy
+                                if 0 <= nx < self.env.field_size and 0 <= ny < self.env.field_size:
+                                    old_beliefs.append(
+                                        agent.belief_map[nx, ny].cpu().numpy().copy()
+                                    )
+
+                    # parse raw obs
+                    obs_i            = next_obs[i]
+                    alignment_patch  = obs_i[:9]
+                    sensor_patch     = obs_i[9:9 + 9 * COUNT_MARKER].reshape(9, COUNT_MARKER)
+
+                    # ── CALCOLO CONFIDENCE ──────────────────────────────────────────
+                    if self.config.get("use_oracle_confidence", False):
+                        oracle_confidence = np.zeros(9, dtype=np.float32)
+                        idx_o = 0
+                        old_idx = 0
+                        for dx in range(-1, 2):
+                            for dy in range(-1, 2):
+                                nx, ny = x + dx, y + dy
+                                if 0 <= nx < self.env.field_size and 0 <= ny < self.env.field_size:
+                                    true_class = self.env.grid_counts[nx, ny]
+                                    old_belief = old_beliefs[old_idx]  # belief PRIMA dell'update
+
+                                    ce_before = -np.log(old_belief[true_class] + 1e-9)
+
+                                    posterior  = old_belief * sensor_patch[idx_o]
+                                    posterior /= (posterior.sum() + 1e-9)
+
+                                    ce_after   = -np.log(posterior[true_class] + 1e-9)
+                                    ce_gain    = ce_before - ce_after
+
+                                    # normalizza in [0,1] come il target dell'LSTM
+                                    oracle_confidence[idx_o] = (np.clip(ce_gain, -1.0, 1.0) + 1.0) / 2.0
+
+                                    old_idx += 1
+                                idx_o += 1
+
+                        confidence_patch = oracle_confidence
+
+                    elif self.config.get("use_lstm", False):
+                        step_feature     = self.build_reliability_step_feature(
+                            obs_i, movement=np.array(agent.last_movement)
+                        )
+                        confidence_patch = self.predict_patch_confidence(i, step_feature)
+
+                    else:
+                        confidence_patch = None
+                    # ────────────────────────────────────────────────────────────────
+
+                    if self.config.get("use_belief", True):
+                        if self.config.get("use_oracle_confidence", False):
+                            # oracle puro: alignment sempre 1.0, solo la confidence conta
+                            fake_alignment = np.ones(9, dtype=np.float32)
+                            agent.update_belief_patch(
+                                sensor_patch     = sensor_patch,
+                                alignment_patch  = fake_alignment,   # ← tutti 1.0
+                                confidence_patch = confidence_patch,
+                                gamma            = 3.0
+                            )
+                        else:
+                            agent.update_belief_patch(
+                                sensor_patch     = sensor_patch,
+                                alignment_patch  = alignment_patch,  # ← normale
+                                confidence_patch = confidence_patch,
+                                gamma            = 3.0
+                            )
+                                        # CE gain medio sulla patch
                     ce_gains = []
                     old_idx = 0
 

@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "C:\Users\santi\OneDrive\Desktop\marl-crop-monitoring\run_experiments.py", line 243, in run_all_experiments
+    metrics = run_single(config_name, config, env_seed)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\santi\OneDrive\Desktop\marl-crop-monitoring\run_experiments.py", line 198, in run_single
+    metrics = exp.run(env_seed=env_seed)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\santi\OneDrive\Desktop\marl-crop-monitoring\experiments\mappo_test.py", line 377, in run
+    metrics = self.trainer.train()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\santi\OneDrive\Desktop\marl-crop-monitoring\training\mappo_training.py", line 261, in train
+    agent.update_belief_patch(
+  File "C:\Users\santi\OneDrive\Desktop\marl-crop-monitoring\utils\agent.py", line 198, in update_belief_patch
+    sensor_dist = sensor_tensor[idx]      # già torch
+                  ^^^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sensor_tensor' where it is not associated with a value

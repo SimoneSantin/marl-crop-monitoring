@@ -22,7 +22,7 @@ def make_gaussian_kernel_torch(radius, sigma, device):
 @torch.no_grad()
 def update_belief_patch_gaussian_evidence_torch(
     belief_map, observed_mask, sensor_patch, alignment_patch,
-    agent_pos, gaussian_kernel, gamma=3.0, alpha=0.5, eps=1e-9, confidence_patch=None
+    agent_pos, gaussian_kernel, gamma=3.0, alpha=0.1, eps=1e-9, confidence_patch=None
 ):
     device = belief_map.device
     H, W, C = belief_map.shape
@@ -116,7 +116,7 @@ class Agent:
 
         self.sigma            = 2.5
         self.inference_radius = 5
-        self.alpha            = 0.5  # peso del delta propagato
+        self.alpha            = 0.1  # peso del delta propagato
 
         self.last_movement = np.array([0.0, 0.0], dtype=np.float32)
 
@@ -154,37 +154,31 @@ class Agent:
                             confidence_patch=None, gamma=3.0):
         x, y = self.env.agent_pos[self.agent_id]
 
+        # ← DEVONO STARE QUI, prima dell'if/else
+        sensor_tensor    = torch.tensor(
+            sensor_patch, dtype=torch.float32, device=self.device
+        )
+        alignment_tensor = torch.tensor(
+            alignment_patch, dtype=torch.float32, device=self.device
+        )
+        confidence_tensor = torch.tensor(
+            confidence_patch, dtype=torch.float32, device=self.device
+        ) if confidence_patch is not None else None
+
         if self.use_gaussian:
-            # ── GAUSSIAN (con o senza LSTM) ───────────────────────────────
-            sensor_tensor    = torch.tensor(
-                sensor_patch, dtype=torch.float32, device=self.device
-            )
-            alignment_tensor = torch.tensor(
-                alignment_patch, dtype=torch.float32, device=self.device
-            )
-
-            if confidence_patch is not None:
-                confidence_tensor = torch.tensor(
-                    confidence_patch, dtype=torch.float32, device=self.device
-                )
-            else:
-                confidence_tensor = None
-
             self.belief_map, self.observed_mask = \
                 update_belief_patch_gaussian_evidence_torch(
-                    belief_map      = self.belief_map,
-                    observed_mask   = self.observed_mask,
-                    sensor_patch    = sensor_tensor,
-                    alignment_patch = alignment_tensor,
-                    agent_pos       = (x, y),
-                    gaussian_kernel = self.gaussian_kernel,
-                    gamma           = gamma,
-                    alpha           = self.alpha,
-                    confidence_patch = confidence_tensor
+                    belief_map       = self.belief_map,
+                    observed_mask    = self.observed_mask,
+                    sensor_patch     = sensor_tensor,
+                    alignment_patch  = alignment_tensor,
+                    agent_pos        = (x, y),
+                    gaussian_kernel  = self.gaussian_kernel,
+                    gamma            = gamma,
+                    alpha            = self.alpha,
+                    confidence_patch = confidence_tensor,
                 )
-
         else:
-            # ── SOLO BAYESIAN (con o senza LSTM) ─────────────────────────
             idx = 0
             for dx in range(-1, 2):
                 for dy in range(-1, 2):
@@ -195,21 +189,20 @@ class Agent:
                         idx += 1
                         continue
 
-                    sensor_dist = sensor_tensor[idx]      # già torch
-                    alignment   = alignment_tensor[idx]   # già torch
+                    sensor_dist = sensor_tensor[idx]      # ← ora disponibile
+                    alignment   = alignment_tensor[idx]   # ← ora disponibile
                     reliability = alignment ** gamma
 
-                    if self.use_lstm and confidence_patch is not None:
+                    if self.use_lstm and confidence_tensor is not None:
                         reliability = reliability * confidence_tensor[idx]
 
                     reliability = torch.clamp(reliability, 0.0, 1.0)
-
                     likelihood  = sensor_dist ** reliability
                     likelihood  = likelihood / (likelihood.sum() + 1e-9)
 
-                    old_belief     = self.belief_map[cx, cy]
-                    updated        = old_belief * likelihood
-                    updated        = updated / (updated.sum() + 1e-9)
+                    old_belief = self.belief_map[cx, cy]
+                    updated    = old_belief * likelihood
+                    updated    = updated / (updated.sum() + 1e-9)
 
                     self.belief_map[cx, cy]    = updated
                     self.observed_mask[cx, cy] = True

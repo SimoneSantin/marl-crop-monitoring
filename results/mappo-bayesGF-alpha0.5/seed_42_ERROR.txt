@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "C:\Users\santi\OneDrive\Desktop\marl-crop-monitoring\run_experiments.py", line 243, in run_all_experiments
+    metrics = run_single(config_name, config, env_seed)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\santi\OneDrive\Desktop\marl-crop-monitoring\run_experiments.py", line 198, in run_single
+    metrics = exp.run(env_seed=env_seed)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\santi\OneDrive\Desktop\marl-crop-monitoring\experiments\mappo_test.py", line 379, in run
+    self.save_models()
+  File "C:\Users\santi\OneDrive\Desktop\marl-crop-monitoring\experiments\mappo_test.py", line 291, in save_models
+    torch.save(
+  File "C:\Users\santi\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\serialization.py", line 627, in save
+    with _open_zipfile_writer(f) as opened_zipfile:
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\santi\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\serialization.py", line 501, in _open_zipfile_writer
+    return container(name_or_buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\santi\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\serialization.py", line 472, in __init__
+    super().__init__(torch._C.PyTorchFileWriter(self.name))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Parent directory results2\MAPPO_mappo_bayes_gf_fs40_agents3_mappo_bayes_gf_2026-06-12_10-24-44\models does not exist.

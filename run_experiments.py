@@ -33,7 +33,7 @@ ENV_SEEDS    = [42, 123, 456]
 NUM_EPISODES = 500  # riduci a 200 per test rapidi
 
 def build_config(experiment_name, use_belief=True, use_gaussian=True,
-                 use_lstm=True, use_random=False):
+                 use_lstm=True, use_random=False, use_oracle_confidence=False):
     return {
         "algorithm":         "MAPPO",
         "experiment_name":   experiment_name,
@@ -41,6 +41,7 @@ def build_config(experiment_name, use_belief=True, use_gaussian=True,
         "use_gaussian":      use_gaussian,
         "use_lstm":          use_lstm,
         "use_random_policy": use_random,
+        "use_oracle_confidence": use_oracle_confidence,
         "env": {
             "field_size":  40,
             "num_agents":  3,
@@ -88,7 +89,7 @@ ALL_CONFIGS = {
                                       use_lstm=True),
     "7_oracle_conf":     build_config("oracle_confidence",
                                       use_belief=True,  use_gaussian=False,
-                                      use_lstm=False),
+                                      use_lstm=False, use_oracle_confidence=True),
 }
 
 COMPUTER_CONFIGS = {
