@@ -86,7 +86,7 @@ ALL_CONFIGS = {
                                       use_lstm=True),
     "6_mappo_gf_lstm":   build_config("mappo_gf_lstm",
                                       use_belief=True,  use_gaussian=True,
-                                      use_lstm=True),
+                                      use_lstm=True, use_oracle_confidence=False),
     "7_oracle_conf":     build_config("oracle_confidence",
                                       use_belief=True,  use_gaussian=False,
                                       use_lstm=False, use_oracle_confidence=True),

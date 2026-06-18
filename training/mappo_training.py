@@ -10,8 +10,8 @@ from LSTM.lstm_model import NetObsReliability
 
 class MAPPOTrainer:
     def __init__(self, env, planner, num_episodes, reward_weights, config,
-                 reliability_model_path="./LSTM/models/patch_reliability_model.pth",
-                 reliability_seq_len=5,
+                 reliability_model_path="./LSTM/models/patch_reliability_model_v3.pth",
+                 reliability_seq_len=8,
                  reliability_hidden_size=128,
                  reliability_num_layers=1):
         self.env = env
@@ -50,30 +50,72 @@ class MAPPOTrainer:
             deque(maxlen=self.reliability_seq_len)
             for _ in range(self.env.num_agents)
         ]
+         
+        self.agent_visit_count = [
+            np.zeros((self.env.field_size, self.env.field_size), dtype=np.float32)
+            for _ in range(self.env.num_agents)
+        ]
+        self.agent_max_align = [
+            np.zeros((self.env.field_size, self.env.field_size), dtype=np.float32)
+            for _ in range(self.env.num_agents)
+        ]
 
     def reset_reliability_histories(self):
         self.agent_patch_histories = [
             deque(maxlen=self.reliability_seq_len)
             for _ in range(self.env.num_agents)
         ]
+        self.agent_visit_count = [
+            np.zeros((self.env.field_size, self.env.field_size), dtype=np.float32)
+            for _ in range(self.env.num_agents)
+        ]
+        self.agent_max_align = [
+            np.zeros((self.env.field_size, self.env.field_size), dtype=np.float32)
+            for _ in range(self.env.num_agents)
+        ]
 
-    def build_reliability_step_feature(self, obs_i, movement):
+    def build_reliability_step_feature(self, obs_i, agent_id, agent_pos, alignment_patch):
         """
+        Costruisce la feature di input per l'LSTM, includendo le feature
+        temporali (visit_count, max_alignment) tracciate per agente.
+
         raw obs attuale:
-        [alignment_patch (9) | sensor_patch_flat (9 * COUNT_MARKER)]
+            [alignment_patch (9) | sensor_patch_flat (9 * COUNT_MARKER)]
         """
-        align_start = 0
         align_end = 9
+        sensor_end = align_end + 9 * COUNT_MARKER
 
-        sensor_start = align_end
-        sensor_end = sensor_start + 9 * COUNT_MARKER
+        alignment_patch_arr = obs_i[0:align_end].astype(np.float32)
+        sensor_patch_flat = obs_i[align_end:sensor_end].astype(np.float32)
 
-        alignment_patch = obs_i[align_start:align_end].astype(np.float32)
-        sensor_patch_flat = obs_i[sensor_start:sensor_end].astype(np.float32)
+        x, y = agent_pos
+        visit_count_patch = np.zeros(9, dtype=np.float32)
+        max_align_patch = np.zeros(9, dtype=np.float32)
+
+        vc_grid = self.agent_visit_count[agent_id]
+        ma_grid = self.agent_max_align[agent_id]
+
+        idx = 0
+        for dx in range(-1, 2):
+            for dy in range(-1, 2):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < self.env.field_size and 0 <= ny < self.env.field_size:
+                    # feature temporali PRIMA dell'update (stato accumulato)
+                    vc = vc_grid[nx, ny]
+                    visit_count_patch[idx] = min(vc / self.reliability_seq_len, 1.0)
+                    max_align_patch[idx] = ma_grid[nx, ny]
+
+                    # aggiorna stato accumulato con l'osservazione corrente
+                    align_val = float(alignment_patch_arr[idx])
+                    vc_grid[nx, ny] = vc + 1.0
+                    ma_grid[nx, ny] = max(ma_grid[nx, ny], align_val)
+                idx += 1
 
         step_feature = np.concatenate([
-            alignment_patch,
-            sensor_patch_flat
+            alignment_patch_arr,    # 9
+            sensor_patch_flat,      # 9 * K
+            visit_count_patch,      # 9
+            max_align_patch,        # 9
         ]).astype(np.float32)
 
         return step_feature
@@ -312,8 +354,11 @@ class MAPPOTrainer:
                         confidence_patch = oracle_confidence
 
                     elif self.config.get("use_lstm", False):
-                        step_feature     = self.build_reliability_step_feature(
-                            obs_i, movement=np.array(agent.last_movement)
+                        step_feature = self.build_reliability_step_feature(
+                            obs_i,
+                            agent_id=i,
+                            agent_pos=(x, y),
+                            alignment_patch=alignment_patch,
                         )
                         confidence_patch = self.predict_patch_confidence(i, step_feature)
 

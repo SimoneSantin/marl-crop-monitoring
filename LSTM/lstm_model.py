@@ -1,13 +1,17 @@
 import torch
 import torch.nn as nn
 
+
 class NetObsReliability(nn.Module):
     def __init__(self, num_classes=10, hidden_size=128, num_layers=1, dropout=0.2):
         """
         Modello LSTM per stimare l'affidabilità delle 9 celle di una patch 3x3.
 
-        Input per timestep:
-            [alignment_patch (9), sensor_patch_flat (9 * num_classes)]
+        Input per timestep (per cella, 9 celle):
+            - alignment_patch          (9)
+            - sensor_patch_flat        (9 * num_classes)
+            - visit_count_patch        (9)   numero di volte che la cella è stata osservata (normalizzato)
+            - max_alignment_patch      (9)   alignment massimo visto finora su quella cella
 
         Output:
             pred_confidence_patch: tensor shape (B, 9), valori in [0,1]
@@ -16,8 +20,14 @@ class NetObsReliability(nn.Module):
 
         self.num_classes = num_classes
         self.patch_cells = 9
-        self.movement = 2
-        self.input_size = self.patch_cells + self.patch_cells * num_classes 
+
+        # alignment(9) + sensor(9*K) + visit_count(9) + max_alignment(9)
+        self.input_size = (
+            self.patch_cells
+            + self.patch_cells * num_classes
+            + self.patch_cells
+            + self.patch_cells
+        )
         self.hidden_size = hidden_size
         self.num_layers = num_layers
 
