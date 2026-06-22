@@ -320,10 +320,20 @@ class MAPPOTest:
         action_dim = self.env.action_space.n
         num_agents = self.env.num_agents
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        use_gaussian = self.config.get("use_gaussian", False)
-        use_lstm     = self.config.get("use_lstm",     False)
+        use_gaussian   = self.config.get("use_gaussian", False)
+        use_lstm       = self.config.get("use_lstm", False)
+        use_cell_lstm  = self.config.get("use_cell_lstm", False)
+
         self.agents = [
-            Agent(self.env, COUNT_MARKER, agent_id=i, planner=None, device=device, use_gaussian=use_gaussian, use_lstm=use_lstm)
+            Agent(
+                self.env, COUNT_MARKER, agent_id=i, planner=None,
+                device=device,
+                use_gaussian=use_gaussian,
+                use_lstm=use_lstm,
+                use_cell_lstm=use_cell_lstm,
+                cell_lstm_path="./LSTM/models/cell_observer_lstm.pth",
+                cell_lstm_hidden=128,   # deve combaciare con come hai addestrato il modello
+            )
             for i in range(num_agents)
         ]
 

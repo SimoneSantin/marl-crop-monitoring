@@ -2,74 +2,55 @@ import torch
 import torch.nn as nn
 
 
-class NetObsReliability(nn.Module):
-    def __init__(self, num_classes=10, hidden_size=128, num_layers=1, dropout=0.2):
-        """
-        Modello LSTM per stimare l'affidabilità delle 9 celle di una patch 3x3.
+class CellObserverLSTM(nn.Module):
+    """
+    LSTM condiviso che osserva una singola cella alla volta.
 
-        Input per timestep (per cella, 9 celle):
-            - alignment_patch          (9)
-            - sensor_patch_flat        (9 * num_classes)
-            - visit_count_patch        (9)   numero di volte che la cella è stata osservata (normalizzato)
-            - max_alignment_patch      (9)   alignment massimo visto finora su quella cella
+    Predice DIRETTAMENTE la distribuzione sulle K classi di una cella,
+    integrando la sequenza temporale delle osservazioni di quella cella.
 
-        Output:
-            pred_confidence_patch: tensor shape (B, 9), valori in [0,1]
-        """
+    - pesi CONDIVISI tra tutte le celle
+    - hidden state (h, c) SEPARATO per cella (gestito esternamente dall'Agent)
+
+    Input per passo: [sensor_dist (K), alignment (1)]
+    Output: logits sulle K classi
+
+    MIGLIORAMENTO (punto 1): hidden_size di default portato da 64 a 128 per
+    maggiore capacità rappresentativa. La head ora ha un hidden intermedio
+    proporzionato al nuovo hidden_size.
+    """
+
+    def __init__(self, num_classes=10, hidden_size=128):
         super().__init__()
-
         self.num_classes = num_classes
-        self.patch_cells = 9
-
-        # alignment(9) + sensor(9*K) + visit_count(9) + max_alignment(9)
-        self.input_size = (
-            self.patch_cells
-            + self.patch_cells * num_classes
-            + self.patch_cells
-            + self.patch_cells
-        )
         self.hidden_size = hidden_size
-        self.num_layers = num_layers
+        self.input_size = num_classes + 1  # sensor_dist (K) + alignment (1)
 
-        self.lstm = nn.LSTM(
-            input_size=self.input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0
+        self.cell = nn.LSTMCell(self.input_size, hidden_size)
+
+        self.head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, num_classes),
         )
 
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_size, 256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-
-            nn.Linear(128, self.patch_cells)
-        )
-
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
+    def step(self, x, h, c):
+        """Un passo per un batch di celle.
+        x: (B, input_size), h/c: (B, hidden_size)
+        ritorna logits (B, num_classes), h_new, c_new
         """
-        Args:
-            x: tensor di shape (B, T, input_size)
+        h_new, c_new = self.cell(x, (h, c))
+        logits = self.head(h_new)
+        return logits, h_new, c_new
 
-        Returns:
-            dict con:
-                pred_confidence_patch: (B, 9) in [0,1]
+    def forward(self, seq):
+        """Forward su sequenza completa (usato in training senza padding).
+        seq: (B, T, input_size) -> logits finali (B, num_classes)
         """
-        x = x.float()
-
-        lstm_out, _ = self.lstm(x)          # (B, T, hidden_size)
-        last_out = lstm_out[:, -1, :]       # (B, hidden_size)
-
-        confidence_logits = self.mlp(last_out)          # (B, 9)
-        pred_confidence_patch = self.sigmoid(confidence_logits)
-
-        return {
-            "pred_confidence_patch": pred_confidence_patch
-        }
+        B, T, _ = seq.shape
+        h = torch.zeros(B, self.hidden_size, device=seq.device)
+        c = torch.zeros(B, self.hidden_size, device=seq.device)
+        logits = None
+        for t in range(T):
+            logits, h, c = self.step(seq[:, t, :], h, c)
+        return logits
