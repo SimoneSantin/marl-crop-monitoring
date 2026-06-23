@@ -55,6 +55,7 @@ class CustomMapEnv(gym.Env):
         # stato ambiente
         self.agent_pos = None
         self.visited_mask = None
+        self.observed_mask = None  
         self.current_step = 0
         self.plant_vec_dx = None
         self.plant_vec_dy = None
@@ -91,9 +92,16 @@ class CustomMapEnv(gym.Env):
             self.agent_pos.append([x, y])
 
         self.visited_mask = np.zeros((self.field_size, self.field_size), dtype=bool)
+        self.observed_mask = np.zeros((self.field_size, self.field_size), dtype=bool)  # NUOVA
 
         for pos in self.agent_pos:
             self.visited_mask[pos[0], pos[1]] = True
+            # marca la patch 3x3 osservata attorno alla posizione iniziale
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    nx, ny = pos[0] + dx, pos[1] + dy
+                    if 0 <= nx < self.field_size and 0 <= ny < self.field_size:
+                        self.observed_mask[nx, ny] = True
 
         self.current_step = 0
         self.prev_coverage = 0.0
@@ -105,121 +113,6 @@ class CustomMapEnv(gym.Env):
 
         return obs, {}
 
-    def step(self, actions):
-
-        self.current_step += 1
-
-        alignments = []
-        new_positions = []
-        new_moves = []
-
-        # ----------------------------
-        # FASE 1: calcolo nuove posizioni
-        # ----------------------------
-        for agent_id, action in enumerate(actions):
-
-            x, y = self.agent_pos[agent_id]
-
-            dx, dy = 0, 0
-
-            if action == 0:   # UP
-                x_new = max(0, x - 1)
-                y_new = y
-                dx = -1
-
-            elif action == 1: # DOWN
-                x_new = min(self.field_size - 1, x + 1)
-                y_new = y
-                dx = 1
-
-            elif action == 2: # LEFT
-                x_new = x
-                y_new = max(0, y - 1)
-                dy = -1
-
-            elif action == 3: # RIGHT
-                x_new = x
-                y_new = min(self.field_size - 1, y + 1)
-                dy = 1
-
-            new_positions.append([x_new, y_new])
-            new_moves.append(np.array([dx, dy]))
-
-        # ----------------------------
-        # FASE 2: aggiornamento stato ambiente
-        # ----------------------------
-        new_cells = 0
-
-        for pos in new_positions:
-            x, y = pos
-
-            if not self.visited_mask[x, y]:
-                new_cells += 1
-
-            self.visited_mask[x, y] = True
-
-        unique_positions = set(tuple(p) for p in new_positions)
-        collisions = len(new_positions) - len(unique_positions)
-
-        visited_cells = np.sum(self.visited_mask)
-        total_cells = self.field_size * self.field_size
-        coverage = visited_cells / total_cells
-
-        self.prev_coverage = coverage
-        self.agent_pos = new_positions
-        self.last_move_vector = new_moves
-
-        obs = self._get_obs(alignments)
-
-        mean_alignment = float(np.mean(alignments))
-        
-        if self.algorithm == "MAPPO":
-
-            proximity_penalty = self.compute_proximity_penalty(
-                self.agent_pos,
-                threshold=1,
-                weight=0.05
-            )
-
-            reward = (
-                self.reward_config["new_cell_weight"] * new_cells
-                - self.reward_config["collision_weight"] * collisions
-                - self.reward_config["step_penalty"]
-                + self.reward_config["alignment_weight"] * mean_alignment
-                - proximity_penalty
-            )
-
-            #if coverage > self.reward_config["completion_threshold"]:
-                #reward += self.reward_config["completion_bonus"]
-                
-            rewards = [reward for _ in range(self.num_agents)]
-
-        else: #MCTS BOTA
-            reward = -0.05
-            rewards = [reward for _ in range(self.num_agents)]
-        # aggiorna stato
-        
-        #check metriche
-        new_cells_term = self.reward_config["new_cell_weight"] * new_cells
-        collisions_term = self.reward_config["collision_weight"] * collisions
-  
-        step_term = self.reward_config["step_penalty"]
-        alignment_term = self.reward_config["alignment_weight"] * mean_alignment
-
-        terminated = coverage > 0.95
-        truncated = self.current_step >= self.max_steps
-        
-        return obs, rewards, terminated, truncated, {
-            "new_cells": new_cells,
-            "collisions": collisions,
-            "coverage": coverage,
-            "reward_terms": {
-                "new_cells": new_cells_term,
-                "collisions": collisions_term,
-                "step": step_term,
-                "alignment": mean_alignment
-            }
-        }
 
     def _get_obs(self, alignments=None):
         observations = []
@@ -372,11 +265,15 @@ class CustomMapEnv(gym.Env):
 
         for pos in new_positions:
             x, y = pos
-
             if not self.visited_mask[x, y]:
                 new_cells += 1
-
             self.visited_mask[x, y] = True
+            # marca la patch 3x3 osservata da questa posizione (NUOVA)
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < self.field_size and 0 <= ny < self.field_size:
+                        self.observed_mask[nx, ny] = True
 
         unique_positions = set(tuple(p) for p in new_positions)
         collisions = len(new_positions) - len(unique_positions)

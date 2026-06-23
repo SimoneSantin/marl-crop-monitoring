@@ -76,7 +76,7 @@ class MAPPOTest:
 
         run_name = f"{algo}_{exp_name}_fs{field_size}_agents{num_agents}_{reward_type}_{timestamp}"
 
-        self.run_dir = os.path.join("results2", run_name)
+        self.run_dir = os.path.join("results3", run_name)
         self.plots_dir = os.path.join(self.run_dir, "plots")
         self.models_dir = os.path.join(self.run_dir, "models")
 
@@ -320,9 +320,10 @@ class MAPPOTest:
         action_dim = self.env.action_space.n
         num_agents = self.env.num_agents
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        use_gaussian   = self.config.get("use_gaussian", False)
-        use_lstm       = self.config.get("use_lstm", False)
-        use_cell_lstm  = self.config.get("use_cell_lstm", False)
+        use_gaussian      = self.config.get("use_gaussian", False)
+        use_lstm          = self.config.get("use_lstm", False)
+        use_cell_lstm     = self.config.get("use_cell_lstm", False)
+        use_random_policy = self.config.get("use_random_policy", False)  # ← AGGIUNTO
 
         self.agents = [
             Agent(
@@ -332,7 +333,8 @@ class MAPPOTest:
                 use_lstm=use_lstm,
                 use_cell_lstm=use_cell_lstm,
                 cell_lstm_path="./LSTM/models/cell_observer_lstm.pth",
-                cell_lstm_hidden=128,   # deve combaciare con come hai addestrato il modello
+                cell_lstm_hidden=128,
+                use_random_policy=use_random_policy,   # ← AGGIUNTO
             )
             for i in range(num_agents)
         ]

@@ -127,26 +127,27 @@ class MAPPOTrainer:
     def compute_global_accuracy(self):
         return float(np.mean([a.compute_accuracy() for a in self.planner.agents]))
 
-    def compute_visited_accuracy(self):
-        visited = self.env.visited_mask.astype(bool)
-        if visited.sum() == 0:
+    def compute_observed_accuracy(self):
+        """Celle osservate dalla patch (vecchia 'visited' allargata)."""
+        observed = self.env.observed_mask.astype(bool)
+        if observed.sum() == 0:
             return 0.0
         true_map = self.env.grid_counts
         return float(np.mean([
-            (a.get_prediction_map()[visited] == true_map[visited]).mean()
+            (a.get_prediction_map()[observed] == true_map[observed]).mean()
             for a in self.planner.agents
         ]))
 
-    def compute_unvisited_accuracy(self):
-        unvisited = ~self.env.visited_mask.astype(bool)
-        if unvisited.sum() == 0:
+    def compute_inferred_accuracy(self):
+        """Celle MAI osservate da nessun agente — vera generalizzazione spaziale."""
+        inferred = ~self.env.observed_mask.astype(bool)
+        if inferred.sum() == 0:
             return 0.0
         true_map = self.env.grid_counts
         return float(np.mean([
-            (a.get_prediction_map()[unvisited] == true_map[unvisited]).mean()
+            (a.get_prediction_map()[inferred] == true_map[inferred]).mean()
             for a in self.planner.agents
         ]))
-
     # ─────────────────────────────────────────────────────────────────────
     def train(self):
         alignment_history         = []
@@ -299,19 +300,21 @@ class MAPPOTrainer:
                     # ── CE gain reward ────────────────────────────────────
                     ce_gains = []
                     old_idx  = 0
-                    for dx in range(-1, 2):
-                        for dy in range(-1, 2):
-                            nx, ny = x + dx, y + dy
-                            if 0 <= nx < self.env.field_size and \
-                               0 <= ny < self.env.field_size:
-                                ob = old_beliefs[old_idx]
-                                nb = agent.belief_map[nx, ny].cpu().numpy()
-                                tc = self.env.grid_counts[nx, ny]
-                                ce_gains.append(
-                                    -np.log(ob[tc] + 1e-9) +
-                                    np.log(nb[tc] + 1e-9)
-                                )
-                                old_idx += 1
+
+                    if use_belief:   # ← AGGIUNGI QUESTA GUARDIA
+                        for dx in range(-1, 2):
+                            for dy in range(-1, 2):
+                                nx, ny = x + dx, y + dy
+                                if 0 <= nx < self.env.field_size and \
+                                0 <= ny < self.env.field_size:
+                                    ob = old_beliefs[old_idx]
+                                    nb = agent.belief_map[nx, ny].cpu().numpy()
+                                    tc = self.env.grid_counts[nx, ny]
+                                    ce_gains.append(
+                                        -np.log(ob[tc] + 1e-9) +
+                                        np.log(nb[tc] + 1e-9)
+                                    )
+                                    old_idx += 1
 
                     patch_ce_gain = float(np.mean(ce_gains)) if ce_gains else 0.0
                     local_accuracy_bonus_per_agent.append(
@@ -353,7 +356,8 @@ class MAPPOTrainer:
                     episode_paths[i].append(tuple(pos))
 
             # ── MAPPO update ──────────────────────────────────────────────
-            self.planner.update()
+            if not self.config.get("use_random_policy", False):
+                self.planner.update()
 
             for k in episode_terms:
                 episode_terms[k] /= max(steps, 1)
@@ -365,8 +369,8 @@ class MAPPOTrainer:
                 episode_accuracy_traces[episode] = episode_accuracy_trace
 
             final_accuracy          = self.compute_global_accuracy()
-            final_visited_accuracy  = self.compute_visited_accuracy()
-            final_unvisited_accuracy= self.compute_unvisited_accuracy()
+            final_visited_accuracy  = self.compute_observed_accuracy()
+            final_unvisited_accuracy= self.compute_inferred_accuracy()
 
             unvisited_accuracy_history.append(final_unvisited_accuracy)
             self.accuracy_history.append(final_accuracy)

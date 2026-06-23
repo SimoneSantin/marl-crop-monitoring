@@ -1,0 +1,7 @@
+Configurazione,Visited accuracy,Unvisited accuracy,Coverage
+No Belief,0.051,0.061,0.599
+Bayesian,0.826,0.531,0.813
+Bayesian + GF,0.671,0.424,0.731
+LSTM puro,0.788,0.492,0.760
+LSTM + GF,0.799,0.533,0.658
+Oracle,0.874,0.632,0.825

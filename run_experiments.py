@@ -30,7 +30,7 @@ from experiments.mappo_test import MAPPOTest
 # ─────────────────────────────────────────────
 
 ENV_SEEDS    = [42, 123, 456]
-NUM_EPISODES = 500  # riduci a 200 per test rapidi
+NUM_EPISODES = 200  # riduci a 200 per test rapidi
 
 def build_config(experiment_name, use_belief=True, use_gaussian=True,
                  use_lstm=False, use_random=False, use_oracle_confidence=False, use_cell_lstm=True):
@@ -106,7 +106,7 @@ COMPUTER_CONFIGS = {
 
 def get_save_path(config_name, env_seed):
     return os.path.join(
-        "results", config_name,
+        "results3", config_name,
         f"seed_{env_seed}.json"
     )
 
@@ -315,6 +315,13 @@ if __name__ == "__main__":
     action="store_true",
     help="Riesegui anche le run gia completate"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Gira solo un seed specifico (es. 42). Se omesso, gira tutti i seed."
+    )
+
     args = parser.parse_args()
 
     # mostra lista configurazioni
@@ -339,6 +346,9 @@ if __name__ == "__main__":
         configs_to_run = [args.config]
     else:
         configs_to_run = COMPUTER_CONFIGS[args.computer]
-
+    if args.seed is not None:
+        ENV_SEEDS = [args.seed]
+        print(f"Modalità seed singolo: gira solo seed {args.seed}")
     print(f"\nConfigurazioni da girare: {configs_to_run}")
+    print(f"Seed: {ENV_SEEDS}")
     run_all_experiments(configs_to_run)

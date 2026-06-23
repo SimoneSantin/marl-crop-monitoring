@@ -109,6 +109,7 @@ class Agent:
         use_cell_lstm=False,
         cell_lstm_path="./LSTM/models/cell_observer_lstm.pth",
         cell_lstm_hidden=64,
+        use_random_policy=False,
     ):
         self.env          = env
         self.planner      = planner
@@ -127,7 +128,7 @@ class Agent:
         self.use_lstm       = use_lstm
         self.use_cell_lstm  = use_cell_lstm
         self.cell_lstm_hidden = cell_lstm_hidden
-
+        self.use_random_policy = use_random_policy
         # ── CellObserverLSTM ──────────────────────────────────────────────
         if self.use_cell_lstm:
             self.cell_lstm = CellObserverLSTM(
@@ -290,14 +291,6 @@ class Agent:
         # un passo LSTM → nuova distribuzione di belief per ogni cella
         logits, h_new, c_new = self.cell_lstm.step(x_in, h_prev, c_prev)
         new_belief = torch.softmax(logits, dim=-1)  # (M, K)
-        if not hasattr(self, "_debug_count"):
-            self._debug_count = 0
-        if self._debug_count < 10:
-            print(f"[DEBUG] use_cell_lstm={self.use_cell_lstm} | "
-                f"belief esempio cella 0: {new_belief[0].detach().cpu().numpy().round(2)} | "
-                f"argmax predetto: {new_belief.argmax(dim=-1).cpu().numpy()}")
-            self._debug_count += 1
-                # aggiorna hidden state e belief
         self.cell_h[cxs, cys] = h_new
         self.cell_c[cxs, cys] = c_new
 
@@ -344,11 +337,21 @@ class Agent:
 
     # ─────────────────────────────────────────
     def choose_action(self, obs):
+        if self.use_random_policy:
+            action_dim = self.env.action_space.n
+            action     = np.random.randint(0, action_dim)
+            log_prob   = torch.tensor(
+                -np.log(action_dim),
+                dtype=torch.float32,
+                device=self.device
+            )
+            return action, log_prob
+
         if hasattr(self.planner, "act"):
             action, log_prob = self.planner.act(obs, self.agent_id)
             return action, log_prob
         raise ValueError("Planner interface not recognized")
-
+    
     def get_prediction_map(self):
         return self.belief_map.argmax(dim=-1).cpu().numpy()
 
