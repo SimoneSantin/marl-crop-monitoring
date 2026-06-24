@@ -624,8 +624,8 @@ def plot_accuracy_vs_coverage_seed(data, group, output_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--results_dir", default="results")
-    parser.add_argument("--output_dir",  default="thesis_plots")
+    parser.add_argument("--results_dir", default="results3")
+    parser.add_argument("--output_dir",  default="thesis_plots2")
     args = parser.parse_args()
     R, O = args.results_dir, args.output_dir
 

@@ -1,0 +1,19 @@
+% Tabella 8.1 — Risultati riassuntivi (media sui 3 seed)
+\begin{table}[ht]
+\centering
+\caption{Confronto delle configurazioni sperimentali. Valori medi sui tre semi (42, 123, 456).}
+\label{tab:results_summary}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Configurazione} & \textbf{Visited} & \textbf{Unvisited} & \textbf{Coverage} \\
+\midrule
+No Belief & \textcolor{gray}{0.052} & \textcolor{gray}{0.053} & 0.655 \\
+Bayesian & 0.662 & \textcolor{gray}{0.011} & 0.698 \\
+Bayesian + GF & 0.670 & 0.141 & 0.632 \\
+LSTM puro & 0.662 & \textcolor{gray}{0.011} & 0.698 \\
+LSTM + GF & 0.699 & 0.133 & 0.411 \\
+\midrule
+\textit{Oracle} & \textit{0.676} & \textit{0.131} & \textit{0.774} \\
+\bottomrule
+\end{tabular}
+\end{table}

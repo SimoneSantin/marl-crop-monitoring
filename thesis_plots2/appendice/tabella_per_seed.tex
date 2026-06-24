@@ -1,0 +1,32 @@
+% Tabella appendice — Risultati per seed
+\begin{table}[ht]
+\centering
+\small
+\caption{Risultati per seed. Valori finali all'episodio 500.}
+\label{tab:results_per_seed}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Configurazione} & \textbf{Seed} & \textbf{Visited} & \textbf{Unvisited} & \textbf{Coverage} \\
+\midrule
+Bayesian & 42 & 0.635 & 0.000 & 0.712 \\
+ & 123 & 0.651 & 0.012 & 0.698 \\
+ & 456 & 0.700 & 0.020 & 0.685 \\
+\midrule
+Bayesian + GF & 42 & 0.574 & 0.171 & 0.308 \\
+ & 123 & 0.729 & 0.144 & 0.746 \\
+ & 456 & 0.706 & 0.108 & 0.841 \\
+\midrule
+LSTM puro & 42 & 0.635 & 0.000 & 0.712 \\
+ & 123 & 0.651 & 0.012 & 0.698 \\
+ & 456 & 0.700 & 0.020 & 0.685 \\
+\midrule
+LSTM + GF & 42 & 0.552 & 0.131 & 0.233 \\
+ & 123 & 0.823 & 0.132 & 0.804 \\
+ & 456 & 0.721 & 0.135 & 0.196 \\
+\midrule
+Oracle & 42 & 0.631 & 0.060 & 0.724 \\
+ & 123 & 0.685 & 0.333 & 0.811 \\
+ & 456 & 0.712 & 0.000 & 0.787 \\
+\bottomrule
+\end{tabular}
+\end{table}
