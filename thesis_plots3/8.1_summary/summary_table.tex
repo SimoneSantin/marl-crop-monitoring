@@ -1,0 +1,19 @@
+% Tabella 8.1 — Risultati riassuntivi: media ± std sui 3 seed
+\begin{table}[ht]
+\centering
+\caption{Confronto delle configurazioni sperimentali. Valori riportati come media $\pm$ deviazione standard sui tre seed (42, 123, 456) all'episodio finale.}
+\label{tab:results_summary}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Config.} & \textbf{Visited} & \textbf{Unvisited} & \textbf{Coverage} & \textbf{Collisioni} \\
+\midrule
+No Belief & \textcolor{gray}{0.052 $\pm$ 0.008} & \textcolor{gray}{0.046 $\pm$ 0.023} & 0.664 $\pm$ 0.183 & 17.0 $\pm$ 3.3 \\
+Bayesian & 0.827 $\pm$ 0.026 & \textcolor{gray}{0.087 $\pm$ 0.151} & 0.820 $\pm$ 0.050 & 57.3 $\pm$ 17.6 \\
+Bayesian + GF & 0.488 $\pm$ 0.046 & 0.165 $\pm$ 0.031 & 0.460 $\pm$ 0.219 & 156.7 $\pm$ 34.8 \\
+LSTM puro & 0.662 $\pm$ 0.034 & \textcolor{gray}{0.011 $\pm$ 0.010} & 0.698 $\pm$ 0.013 & 143.4 $\pm$ 15.4 \\
+LSTM + GF & 0.691 $\pm$ 0.069 & 0.164 $\pm$ 0.048 & 0.528 $\pm$ 0.240 & 286.8 $\pm$ 50.6 \\
+\midrule
+\textit{Oracle} & \textit{0.722 $\pm$ 0.061} & \textit{\textcolor{gray}{0.073 $\pm$ 0.064}} & \textit{0.737 $\pm$ 0.056} & \textit{40.0 $\pm$ 10.4} \\
+\bottomrule
+\end{tabular}
+\end{table}

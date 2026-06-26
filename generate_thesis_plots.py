@@ -4,28 +4,19 @@ generate_thesis_plots.py
 Genera i grafici per il Capitolo 8 della tesi.
 File JSON attesi in: results/<config_name>/seed_<seed>.json
 
-Output:
-    thesis_plots/
-    ├── 8.1_summary/
-    │   ├── summary_table.csv
-    │   └── summary_table.tex
-    ├── 8.2_ablation/
-    │   ├── global_accuracy.png       NoBelief · Bayesian · GF · Oracle
-    │   ├── unvisited_accuracy.png    NoBelief · Bayesian · GF · Oracle
-    │   └── coverage.png              NoBelief · Bayesian · GF · Oracle
-    ├── 8.3_lstm_analysis/
-    │   ├── global_accuracy.png       GF · LSTM · LSTM+GF · Oracle
-    │   ├── unvisited_accuracy.png    GF · LSTM · LSTM+GF · Oracle
-    │   └── coverage.png              GF · LSTM · LSTM+GF · Oracle
-    ├── 8.4_tradeoff_behavior/
-    │   ├── collisions_barplot.png    NoBelief · Bayesian · GF · LSTM · LSTM+GF
-    │   ├── episodes_to_target.png    NoBelief · Bayesian · GF · LSTM · LSTM+GF
-    │   └── accuracy_vs_coverage.png  NoBelief · Bayesian · GF · LSTM · LSTM+GF
-    └── appendice/
-        ├── tabella_per_seed.tex
-        ├── visited_accuracy_ablation.png
-        ├── visited_accuracy_lstm.png
-        └── accuracy_vs_coverage_seed.png
+Differenze rispetto alla versione precedente:
+  - Curve temporali: banda di varianza (±SEM di default) disegnata SOLO sulle
+    curve indicate da `band_labels` (di norma le curve "focus"), per evitare il
+    sovraffollamento con 4 linee. Le curve di riferimento (No Belief, Oracle)
+    non hanno banda.
+  - 8.4 trade-off: rimossi i punti per seed. La variabilità è mostrata con
+    barre di errore (±1 std):
+      * collisions_barplot  -> barre di errore verticali
+      * episodes_to_target  -> barre di errore verticali
+      * accuracy_vs_coverage -> un punto medio per configurazione con barre di
+        errore su entrambi gli assi (x = coverage, y = visited)
+  - Appendice: lo scatter per seed resta con i punti seed (serve proprio a
+    mostrare il dettaglio); la tabella per seed resta invariata.
 
 Uso:
     python generate_thesis_plots.py
@@ -38,7 +29,6 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.lines import Line2D
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURAZIONE GLOBALE
@@ -55,16 +45,18 @@ CONFIGS = {
     "7_oracle_conf":     {"label": "Oracle",           "color": "#C00000", "ls": "--"},
 }
 
-# Gruppi per sezione — GF e Oracle si ripetono in 8.2 e 8.3: è corretto,
-# in 8.2 GF è il punto di arrivo dell'ablation, in 8.3 è la baseline di partenza.
 GROUP_82 = ["2_mappo_no_belief", "3_mappo_bayesian", "4_mappo_bayes_gf", "7_oracle_conf"]
 GROUP_83 = ["4_mappo_bayes_gf",  "5_mappo_lstm",     "6_mappo_gf_lstm",  "7_oracle_conf"]
 GROUP_84 = ["2_mappo_no_belief", "3_mappo_bayesian",  "4_mappo_bayes_gf",
             "5_mappo_lstm",      "6_mappo_gf_lstm"]
-
-# Configurazioni per appendice (escluso No Belief perché accuracy = prior)
 GROUP_APP = ["3_mappo_bayesian", "4_mappo_bayes_gf",
              "5_mappo_lstm",     "6_mappo_gf_lstm", "7_oracle_conf"]
+
+# Tipo di banda di varianza per le curve temporali:
+#   "sem"  -> ±1 errore standard (std/sqrt(n))  [consigliato con 3 seed]
+#   "std"  -> ±1 deviazione standard
+#   "half" -> ±0.5 deviazione standard
+BAND_KIND = "sem"
 
 plt.rcParams.update({
     "font.family":       "serif",
@@ -100,12 +92,11 @@ def load_data(results_dir):
 
 
 def get_mean_history(data, config_name, key):
-    """Media di una history sui seed disponibili."""
+    """Media di una history sui seed disponibili (senza banda)."""
     histories = [
         data[config_name][s][key]
         for s in SEEDS
-        if data[config_name][s] is not None
-        and data[config_name][s].get(key)
+        if data[config_name][s] is not None and data[config_name][s].get(key)
     ]
     if not histories:
         return None, None
@@ -114,14 +105,31 @@ def get_mean_history(data, config_name, key):
     return np.arange(min_len), arr.mean(axis=0)
 
 
-def get_scalar(data, config_name, key):
-    """Lista dei valori scalari per i 3 seed."""
-    return [
+def get_mean_band_history(data, config_name, key, band=BAND_KIND):
+    """Media + semiampiezza della banda di varianza, puntuale sui seed.
+
+    Ritorna (episodi, media, half) dove la banda da disegnare è
+    [media - half, media + half].
+    """
+    histories = [
         data[config_name][s][key]
-        if data[config_name][s] is not None and key in data[config_name][s]
-        else None
         for s in SEEDS
+        if data[config_name][s] is not None and data[config_name][s].get(key)
     ]
+    if not histories:
+        return None, None, None
+    min_len = min(len(h) for h in histories)
+    arr = np.array([h[:min_len] for h in histories])
+    mean = arr.mean(axis=0)
+    std = arr.std(axis=0, ddof=1) if arr.shape[0] > 1 else np.zeros_like(mean)
+    n = arr.shape[0]
+    if band == "sem":
+        half = std / np.sqrt(n)
+    elif band == "half":
+        half = 0.5 * std
+    else:  # "std"
+        half = std
+    return np.arange(min_len), mean, half
 
 
 def get_final_from_history(data, config_name, key):
@@ -136,10 +144,25 @@ def get_final_from_history(data, config_name, key):
     return vals
 
 
+def get_scalar_values(data, config_name, key):
+    """Valori scalari (non-history) per i seed disponibili."""
+    vals = []
+    for s in SEEDS:
+        d = data[config_name][s]
+        if d is not None and key in d and d[key] is not None:
+            vals.append(d[key])
+    return vals
+
+
 def moving_average(arr, window=30):
     if len(arr) < window:
         return arr
     return np.convolve(arr, np.ones(window) / window, mode="valid")
+
+
+def _std(vals):
+    """std campionaria; 0 se meno di 2 valori."""
+    return float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0
 
 
 def makedirs(path):
@@ -147,44 +170,43 @@ def makedirs(path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GRAFICI TEMPORALI
+# GRAFICI TEMPORALI (con banda di varianza selettiva)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_temporal(data, group, metric_key, title, ylabel, output_path,
-                  window=30, focus_labels=None, thin_labels=None):
+                  window=30, focus_labels=None, thin_labels=None,
+                  band_labels=None):
     """Una curva per configurazione (media sui seed, smoothed).
 
-    Modifiche di leggibilità:
-    - figura riportata alla dimensione originale;
-    - linee complessivamente più sottili;
-    - alcune curve di riferimento ulteriormente assottigliate;
-    - curve secondarie leggermente trasparenti;
-    - etichette dirette a fine curva;
-    - legenda fuori dal grafico.
+    band_labels: insieme di label su cui disegnare la banda di varianza.
+                 Se None (default) la banda viene messa su TUTTE le curve
+                 del gruppo (escluse le thin, che non la ricevono mai).
+                 Passare una lista di label specifiche per limitarla a quelle.
+                 Passare [] (lista vuota) per non disegnare alcuna banda.
     """
     fig, ax = plt.subplots(figsize=(8, 4.5))
 
-    if focus_labels is None:
-        focus_labels = {"Oracle"}
+    focus_labels = set(focus_labels) if focus_labels else {"Oracle"}
+    thin_labels = set(thin_labels) if thin_labels else set()
+    # banda: default = tutte le curve del gruppo; mai sulle thin
+    if band_labels is None:
+        # ricaviamo le label di tutto il gruppo al volo
+        band_labels = {CONFIGS[cn]["label"] for cn in group}
     else:
-        focus_labels = set(focus_labels)
-
-    if thin_labels is None:
-        thin_labels = set()
-    else:
-        thin_labels = set(thin_labels)
+        band_labels = set(band_labels)
 
     line_ends = []
     max_x = 0
 
     for config_name in group:
         cfg = CONFIGS[config_name]
-        eps, mean = get_mean_history(data, config_name, metric_key)
+        eps, mean, half = get_mean_band_history(data, config_name, metric_key)
         if eps is None:
             print(f"  [SKIP] {config_name} — {metric_key} non disponibile")
             continue
 
         sm = moving_average(mean, window)
+        sm_half = moving_average(half, window)
         x = eps[:len(sm)]
         if len(x) == 0:
             continue
@@ -193,50 +215,41 @@ def plot_temporal(data, group, metric_key, title, ylabel, output_path,
         is_focus = label in focus_labels
         is_thin = label in thin_labels
 
-        # Linee più sottili rispetto alla versione precedente:
-        # - focus: leggermente più evidente, ma non troppo spesso;
-        # - standard: più leggero;
-        # - thin: curve di contesto/riferimento ulteriormente ridotte.
         if is_thin:
             linewidth = 1.15
         elif is_focus:
             linewidth = 2.05
         else:
             linewidth = 1.55
-
         alpha = 0.85 if is_thin else (1.0 if is_focus else 0.78)
         zorder = 4 if is_focus and not is_thin else 3
 
+        # banda di varianza SOLO su curve designate e mai sulle thin
+        if (label in band_labels) and (not is_thin):
+            n = min(len(sm), len(sm_half))
+            ax.fill_between(
+                x[:n], (sm[:n] - sm_half[:n]), (sm[:n] + sm_half[:n]),
+                color=cfg["color"], alpha=0.13, linewidth=0, zorder=2,
+            )
+
         ax.plot(
-            x,
-            sm,
-            color=cfg["color"],
-            linestyle=cfg["ls"],
-            linewidth=linewidth,
-            alpha=alpha,
-            label=label,
-            zorder=zorder,
+            x, sm,
+            color=cfg["color"], linestyle=cfg["ls"],
+            linewidth=linewidth, alpha=alpha, label=label, zorder=zorder,
         )
 
         max_x = max(max_x, int(x[-1]))
         line_ends.append({
-            "label": label,
-            "x": float(x[-1]),
-            "y": float(sm[-1]),
-            "color": cfg["color"],
-            "alpha": alpha,
-            "is_focus": is_focus,
+            "label": label, "x": float(x[-1]), "y": float(sm[-1]),
+            "color": cfg["color"], "alpha": alpha, "is_focus": is_focus,
         })
 
     ax.set_title(title)
     ax.set_xlabel("Episodio")
     ax.set_ylabel(ylabel)
 
-    # Spazio a destra per le etichette dirette.
     if line_ends:
         ax.set_xlim(0, max_x + 55)
-
-        # Evita sovrapposizioni tra etichette finali troppo vicine.
         ymin, ymax = ax.get_ylim()
         min_sep = (ymax - ymin) * 0.035
         ordered = sorted(line_ends, key=lambda item: item["y"])
@@ -246,31 +259,20 @@ def plot_temporal(data, group, metric_key, title, ylabel, output_path,
             y = item["y"] if last_y is None else max(item["y"], last_y + min_sep)
             adjusted.append((item, y))
             last_y = y
-
-        # Se le etichette superano il limite superiore, le riporta dentro il grafico.
         overflow = adjusted[-1][1] - ymax if adjusted else 0
         if overflow > 0:
             adjusted = [(item, y - overflow) for item, y in adjusted]
-
         for item, y_text in adjusted:
             ax.text(
-                max_x + 8,
-                y_text,
-                item["label"],
-                color=item["color"],
-                alpha=item["alpha"],
-                fontsize=8.5,
+                max_x + 8, y_text, item["label"],
+                color=item["color"], alpha=item["alpha"], fontsize=8.5,
                 fontweight="bold" if item["is_focus"] and item["alpha"] >= 0.99 else "normal",
-                va="center",
-                clip_on=False,
+                va="center", clip_on=False,
             )
 
-    # Legenda fuori dal grafico per non coprire le curve.
     ax.legend(
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.22),
-        ncol=min(len(group), 4),
-        framealpha=0.85,
+        loc="upper center", bbox_to_anchor=(0.5, -0.22),
+        ncol=min(len(group), 4), framealpha=0.85,
     )
 
     fig.tight_layout()
@@ -281,50 +283,37 @@ def plot_temporal(data, group, metric_key, title, ylabel, output_path,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BAR PLOT — collisioni
+# BAR PLOT — collisioni (barre di errore ±1 std, senza punti seed)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_collisions_barplot(data, group, output_path):
-    """Bar plot delle collisioni medie con punti seed visibili ed etichettati."""
-    labels, means, colors, seed_vals = [], [], [], []
+    labels, means, stds, colors = [], [], [], []
 
     for config_name in group:
         cfg = CONFIGS[config_name]
-        vals = []
-        for seed in SEEDS:
-            d = data[config_name][seed]
-            if d is not None and "mean_collisions" in d:
-                vals.append((seed, d["mean_collisions"]))
+        vals = get_scalar_values(data, config_name, "mean_collisions")
         if not vals:
             continue
         labels.append(cfg["label"])
-        means.append(np.mean([v for _, v in vals]))
+        means.append(float(np.mean(vals)))
+        stds.append(_std(vals))
         colors.append(cfg["color"])
-        seed_vals.append(vals)
 
     x = np.arange(len(labels))
     fig, ax = plt.subplots(figsize=(9, 4.5))
     ax.bar(x, means, color=colors, width=0.55, alpha=0.85, zorder=2)
+    ax.errorbar(x, means, yerr=stds, fmt="none", color="black",
+                capsize=5, linewidth=1.4, zorder=4)
 
-    for i, vals in enumerate(seed_vals):
-        jitter = np.linspace(-0.1, 0.1, len(vals))
-        for j, (seed, v) in enumerate(vals):
-            px = x[i] + jitter[j]
-            ax.scatter(px, v, color="black", s=28, zorder=4, alpha=0.8)
-            ax.annotate(
-                str(seed),
-                xy=(px, v),
-                xytext=(3, 4),
-                textcoords="offset points",
-                fontsize=7.5,
-                color="black",
-                zorder=5,
-            )
+    for i, (m, s) in enumerate(zip(means, stds)):
+        ax.text(x[i], m + s + max(means) * 0.02,
+                f"{m:.1f}±{s:.1f}", ha="center", va="bottom",
+                fontsize=8.5, color="#333333")
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=20, ha="right")
     ax.set_ylabel("Collisioni medie per episodio")
-    ax.set_title("Collisioni medie per configurazione")
+    ax.set_title("Collisioni medie per configurazione (media ± std, 3 seed)")
     fig.tight_layout()
     makedirs(output_path)
     fig.savefig(output_path, bbox_inches="tight")
@@ -333,59 +322,63 @@ def plot_collisions_barplot(data, group, output_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BAR PLOT — episodi a target accuracy
+# BAR PLOT — episodi a target (barre di errore ±1 std, senza punti seed)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_episodes_to_target(data, group, output_path):
-    """Bar plot degli episodi per raggiungere soglie 0.75 e 0.80."""
     max_ep = 500
-    labels, vals_075, vals_080, colors = [], [], [], []
+    labels = []
+    m075, s075, m080, s080, colors = [], [], [], [], []
 
     for config_name in group:
         cfg = CONFIGS[config_name]
-        ep075 = [data[config_name][s]["episodes_to_075"]
-                 for s in SEEDS
-                 if data[config_name][s] is not None
-                 and "episodes_to_075" in data[config_name][s]]
-        ep080 = [data[config_name][s]["episodes_to_080"]
-                 for s in SEEDS
-                 if data[config_name][s] is not None
-                 and "episodes_to_080" in data[config_name][s]]
+        ep075 = get_scalar_values(data, config_name, "episodes_to_075")
+        ep080 = get_scalar_values(data, config_name, "episodes_to_080")
         if not ep075:
             continue
         labels.append(cfg["label"])
-        vals_075.append(np.mean(ep075))
-        vals_080.append(np.mean(ep080) if ep080 else max_ep)
+        m075.append(float(np.mean(ep075)))
+        s075.append(_std(ep075))
+        m080.append(float(np.mean(ep080)) if ep080 else max_ep)
+        s080.append(_std(ep080) if ep080 else 0.0)
         colors.append(cfg["color"])
 
     x = np.arange(len(labels))
     w = 0.35
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.bar(x - w/2, vals_075, width=w, color=colors, alpha=0.9,
-           label="Target 0.75", zorder=2)
-    ax.bar(x + w/2, vals_080, width=w, color=colors, alpha=0.55,
-           label="Target 0.80", zorder=2, hatch="//")
 
-    for i, (v75, v80) in enumerate(zip(vals_075, vals_080)):
+    ax.bar(x - w/2, m075, width=w, color=colors, alpha=0.9,
+           label="Target 0.75", zorder=2)
+    ax.errorbar(x - w/2, m075, yerr=s075, fmt="none", color="black",
+                capsize=4, linewidth=1.2, zorder=4)
+    ax.bar(x + w/2, m080, width=w, color=colors, alpha=0.55,
+           label="Target 0.80", zorder=2, hatch="//")
+    ax.errorbar(x + w/2, m080, yerr=s080, fmt="none", color="black",
+                capsize=4, linewidth=1.2, zorder=4)
+
+    for i, (v75, sv75, v80, sv80) in enumerate(zip(m075, s075, m080, s080)):
         if v75 >= max_ep:
             ax.text(x[i] - w/2, max_ep + 8, "n.r.",
                     ha="center", fontsize=8, color="gray")
+        else:
+            ax.text(x[i] - w/2, v75 + sv75 + max_ep * 0.02,
+                    f"{v75:.0f}±{sv75:.0f}", ha="center", va="bottom",
+                    fontsize=7.5, color="#333333")
         if v80 >= max_ep:
             ax.text(x[i] + w/2, max_ep + 8, "n.r.",
                     ha="center", fontsize=8, color="gray")
+        else:
+            ax.text(x[i] + w/2, v80 + sv80 + max_ep * 0.02,
+                    f"{v80:.0f}±{sv80:.0f}", ha="center", va="bottom",
+                    fontsize=7.5, color="#333333")
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=20, ha="right")
-    ax.set_ylabel("Episodio (media sui 3 seed)")
+    ax.set_ylabel("Episodio (media ± std, 3 seed)")
     ax.set_title("Episodi per raggiungere il target di accuratezza")
-    ax.set_ylim(0, max_ep * 1.15)
-    # Legenda fuori dal grafico.
-    ax.legend(
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.18),
-        ncol=2,
-        framealpha=0.85,
-    )
+    ax.set_ylim(0, max_ep * 1.18)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18),
+              ncol=2, framealpha=0.85)
     fig.tight_layout()
     makedirs(output_path)
     fig.savefig(output_path, bbox_inches="tight")
@@ -394,56 +387,40 @@ def plot_episodes_to_target(data, group, output_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SCATTER — accuracy vs coverage (versione 8.4, con etichette seed)
+# SCATTER 8.4 — un punto medio per configurazione, barre di errore su x e y
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_accuracy_vs_coverage(data, group, output_path):
-    """Scatter: punti seed etichettati, senza stella della media."""
     fig, ax = plt.subplots(figsize=(7, 5))
     legend_handles = []
 
     for config_name in group:
         cfg = CONFIGS[config_name]
-        has_points = False
+        covs = [v for v in get_final_from_history(data, config_name, "coverage_history") if v is not None]
+        accs = [v for v in get_final_from_history(data, config_name, "accuracy_visited_history") if v is not None]
+        if not covs or not accs:
+            continue
 
-        for seed in SEEDS:
-            d = data[config_name][seed]
-            cov = d["coverage_history"][-1] if d and d.get("coverage_history") else None
-            acc = d["accuracy_visited_history"][-1] if d and d.get("accuracy_visited_history") else None
+        mc, sc = float(np.mean(covs)), _std(covs)
+        ma, sa = float(np.mean(accs)), _std(accs)
 
-            if cov is None or acc is None:
-                continue
+        ax.errorbar(
+            mc, ma, xerr=sc, yerr=sa, fmt="o", color=cfg["color"],
+            markersize=9, capsize=5, linewidth=1.4,
+            markeredgecolor="white", markeredgewidth=0.8, zorder=4,
+        )
+        ax.annotate(cfg["label"], xy=(mc, ma), xytext=(6, 4),
+                    textcoords="offset points", fontsize=8.5,
+                    color=cfg["color"], zorder=5)
+        legend_handles.append(mpatches.Patch(color=cfg["color"], label=cfg["label"]))
 
-            has_points = True
-            ax.scatter(cov, acc,
-                       color=cfg["color"], s=55, alpha=0.75, zorder=3)
-            ax.annotate(
-                str(seed),
-                xy=(cov, acc),
-                xytext=(4, 4),
-                textcoords="offset points",
-                fontsize=7.5,
-                color=cfg["color"],
-                zorder=4,
-            )
-
-        if has_points:
-            legend_handles.append(
-                mpatches.Patch(color=cfg["color"], label=cfg["label"]))
-
-    ax.set_xlabel("Coverage finale")
-    ax.set_ylabel("Visited accuracy finale")
+    ax.set_xlabel("Coverage finale (media ± std)")
+    ax.set_ylabel("Visited accuracy finale (media ± std)")
     ax.set_title("Trade-off accuratezza / copertura")
-
-    # Legenda fuori dal grafico.
-    ax.legend(
-        handles=legend_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        fontsize=8.5,
-        framealpha=0.85,
-    )
-
+    ax.text(0.02, 0.03, "Barre: ±1 std (3 seed)", transform=ax.transAxes,
+            fontsize=8, color="#666666", style="italic")
+    ax.legend(handles=legend_handles, loc="center left",
+              bbox_to_anchor=(1.02, 0.5), fontsize=8.5, framealpha=0.85)
     fig.tight_layout()
     makedirs(output_path)
     fig.savefig(output_path, bbox_inches="tight")
@@ -459,20 +436,14 @@ def export_summary_table_csv(data, output_path):
     import csv
     rows = []
     for config_name, cfg in CONFIGS.items():
-        vis  = [v for v in get_final_from_history(
-                    data, config_name, "accuracy_visited_history")
-                if v is not None]
-        unv  = [v for v in get_final_from_history(
-                    data, config_name, "accuracy_unvisited_history")
-                if v is not None]
-        cov  = [v for v in get_final_from_history(
-                    data, config_name, "coverage_history")
-                if v is not None]
+        vis = [v for v in get_final_from_history(data, config_name, "accuracy_visited_history") if v is not None]
+        unv = [v for v in get_final_from_history(data, config_name, "accuracy_unvisited_history") if v is not None]
+        cov = [v for v in get_final_from_history(data, config_name, "coverage_history") if v is not None]
         rows.append({
-            "Configurazione":   cfg["label"],
-            "Visited accuracy": f"{np.mean(vis):.3f}" if vis else "n/a",
+            "Configurazione":     cfg["label"],
+            "Visited accuracy":   f"{np.mean(vis):.3f}" if vis else "n/a",
             "Unvisited accuracy": f"{np.mean(unv):.3f}" if unv else "n/a",
-            "Coverage":         f"{np.mean(cov):.3f}" if cov else "n/a",
+            "Coverage":           f"{np.mean(cov):.3f}" if cov else "n/a",
         })
     makedirs(output_path)
     with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -505,15 +476,9 @@ def export_summary_table_latex(data, output_path):
         "\\midrule",
     ]
     for config_name, cfg in CONFIGS.items():
-        vis = [v for v in get_final_from_history(
-                   data, config_name, "accuracy_visited_history")
-               if v is not None]
-        unv = [v for v in get_final_from_history(
-                   data, config_name, "accuracy_unvisited_history")
-               if v is not None]
-        cov = [v for v in get_final_from_history(
-                   data, config_name, "coverage_history")
-               if v is not None]
+        vis = [v for v in get_final_from_history(data, config_name, "accuracy_visited_history") if v is not None]
+        unv = [v for v in get_final_from_history(data, config_name, "accuracy_unvisited_history") if v is not None]
+        cov = [v for v in get_final_from_history(data, config_name, "coverage_history") if v is not None]
         label = cfg["label"]
         if "Oracle" in label:
             lines.append("\\midrule")
@@ -521,7 +486,6 @@ def export_summary_table_latex(data, output_path):
                          f"& \\textit{{{fmt(unv)}}} & \\textit{{{fmt(cov)}}} \\\\")
         else:
             lines.append(f"{label} & {fmt(vis)} & {fmt(unv)} & {fmt(cov)} \\\\")
-
     lines += ["\\bottomrule", "\\end{tabular}", "\\end{table}"]
     makedirs(output_path)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -548,12 +512,9 @@ def export_seed_table_latex(data, output_path):
         first = True
         for seed in SEEDS:
             d = data[config_name][seed]
-            vis  = f"{d['accuracy_visited_history'][-1]:.3f}"   \
-                   if d and d.get("accuracy_visited_history")   else "—"
-            unv  = f"{d['accuracy_unvisited_history'][-1]:.3f}" \
-                   if d and d.get("accuracy_unvisited_history") else "—"
-            cov  = f"{d['coverage_history'][-1]:.3f}"           \
-                   if d and d.get("coverage_history")           else "—"
+            vis = f"{d['accuracy_visited_history'][-1]:.3f}"   if d and d.get("accuracy_visited_history")   else "—"
+            unv = f"{d['accuracy_unvisited_history'][-1]:.3f}" if d and d.get("accuracy_unvisited_history") else "—"
+            cov = f"{d['coverage_history'][-1]:.3f}"           if d and d.get("coverage_history")           else "—"
             label_col = cfg["label"] if first else ""
             lines.append(f"{label_col} & {seed} & {vis} & {unv} & {cov} \\\\")
             first = False
@@ -567,50 +528,35 @@ def export_seed_table_latex(data, output_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SCATTER APPENDICE — con etichette seed
+# SCATTER APPENDICE — punti per seed (resta col dettaglio seed)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_accuracy_vs_coverage_seed(data, group, output_path):
-    """Scatter con etichetta seed su ogni punto, senza stella della media."""
     fig, ax = plt.subplots(figsize=(8, 6))
     legend_handles = []
 
     for config_name in group:
         cfg = CONFIGS[config_name]
         has_points = False
-
         for seed in SEEDS:
             d = data[config_name][seed]
             cov = d["coverage_history"][-1] if d and d.get("coverage_history") else None
             acc = d["accuracy_visited_history"][-1] if d and d.get("accuracy_visited_history") else None
-
             if cov is None or acc is None:
                 continue
-
             has_points = True
-            ax.scatter(cov, acc, color=cfg["color"], s=55,
-                       alpha=0.8, zorder=3)
+            ax.scatter(cov, acc, color=cfg["color"], s=55, alpha=0.8, zorder=3)
             ax.annotate(str(seed), xy=(cov, acc), xytext=(4, 4),
-                        textcoords="offset points",
-                        fontsize=7.5, color=cfg["color"], zorder=4)
-
+                        textcoords="offset points", fontsize=7.5,
+                        color=cfg["color"], zorder=4)
         if has_points:
-            legend_handles.append(
-                mpatches.Patch(color=cfg["color"], label=cfg["label"]))
+            legend_handles.append(mpatches.Patch(color=cfg["color"], label=cfg["label"]))
 
     ax.set_xlabel("Coverage finale")
     ax.set_ylabel("Visited accuracy finale")
     ax.set_title("Trade-off accuratezza / copertura — dettaglio per seed")
-
-    # Legenda fuori dal grafico.
-    ax.legend(
-        handles=legend_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        fontsize=8.5,
-        framealpha=0.85,
-    )
-
+    ax.legend(handles=legend_handles, loc="center left",
+              bbox_to_anchor=(1.02, 0.5), fontsize=8.5, framealpha=0.85)
     fig.tight_layout()
     makedirs(output_path)
     fig.savefig(output_path, bbox_inches="tight")
@@ -631,6 +577,7 @@ def main():
 
     print(f"\nCaricamento dati da: {R}")
     data = load_data(R)
+
     # ── 8.1 Tabella riassuntiva ──────────────────────────────────────────────
     print("\n── 8.1 Tabella riassuntiva ─────────────────────────────")
     d81 = os.path.join(O, "8.1_summary")
@@ -638,21 +585,23 @@ def main():
     export_summary_table_latex(data, os.path.join(d81, "summary_table.tex"))
 
     # ── 8.2 Ablation study ──────────────────────────────────────────────────
-    # NoBelief · Bayesian · GF · Oracle
     print("\n── 8.2 Ablation study ──────────────────────────────────")
     d82 = os.path.join(O, "8.2_ablation")
+    # Global accuracy: curve che si incrociano -> banda su tutte (default)
     plot_temporal(data, GROUP_82, "accuracy_history",
                   "Global accuracy — Ablation study",
                   "Global accuracy (media 3 seed)",
                   os.path.join(d82, "global_accuracy.png"),
                   focus_labels=["Bayesian", "Bayesian + GF"],
                   thin_labels=["No Belief", "Oracle"])
+    # Unvisited: banda su tutte (default)
     plot_temporal(data, GROUP_82, "accuracy_unvisited_history",
                   "Unvisited accuracy — Ablation study",
                   "Unvisited accuracy (media 3 seed)",
                   os.path.join(d82, "unvisited_accuracy.png"),
                   focus_labels=["Bayesian", "Bayesian + GF"],
                   thin_labels=["No Belief", "Oracle"])
+    # Coverage: banda su tutte (default)
     plot_temporal(data, GROUP_82, "coverage_history",
                   "Coverage — Ablation study",
                   "Coverage (media 3 seed)",
@@ -662,7 +611,6 @@ def main():
                   thin_labels=["No Belief", "Oracle"])
 
     # ── 8.3 Analisi LSTM ────────────────────────────────────────────────────
-    # GF · LSTM · LSTM+GF · Oracle
     print("\n── 8.3 Analisi LSTM ────────────────────────────────────")
     d83 = os.path.join(O, "8.3_lstm_analysis")
     plot_temporal(data, GROUP_83, "accuracy_history",
@@ -686,7 +634,6 @@ def main():
                   thin_labels=["Bayesian + GF", "Oracle"])
 
     # ── 8.4 Trade-off e comportamento ───────────────────────────────────────
-    # NoBelief · Bayesian · GF · LSTM · LSTM+GF
     print("\n── 8.4 Trade-off e comportamento ───────────────────────")
     d84 = os.path.join(O, "8.4_tradeoff_behavior")
     plot_collisions_barplot(data, GROUP_84,

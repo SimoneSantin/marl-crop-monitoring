@@ -1,0 +1,31 @@
+% Tabella appendice — Risultati per seed
+\begin{table}[ht]
+\centering\small
+\caption{Risultati per singolo seed (valori finali, episodio 500). Riportati in appendice come riferimento per l'analisi di instabilità.}
+\label{tab:results_per_seed}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Config.} & \textbf{Seed} & \textbf{Visited} & \textbf{Unvisited} & \textbf{Coverage} & \textbf{Collisioni} \\
+\midrule
+Bayesian & 42 & 0.840 & 0.000 & 0.834 & 40.4 \\
+ & 123 & 0.797 & 0.261 & 0.765 & 55.9 \\
+ & 456 & 0.845 & 0.000 & 0.861 & 75.6 \\
+\midrule
+Bayesian + GF & 42 & 0.505 & 0.195 & 0.431 & 138.1 \\
+ & 123 & 0.435 & 0.133 & 0.256 & 196.8 \\
+ & 456 & 0.523 & 0.167 & 0.692 & 135.2 \\
+\midrule
+LSTM puro & 42 & 0.635 & 0.000 & 0.712 & 126.5 \\
+ & 123 & 0.651 & 0.012 & 0.698 & 146.7 \\
+ & 456 & 0.700 & 0.020 & 0.685 & 156.8 \\
+\midrule
+LSTM + GF & 42 & 0.650 & 0.130 & 0.289 & 275.0 \\
+ & 123 & 0.654 & 0.144 & 0.526 & 243.1 \\
+ & 456 & 0.771 & 0.220 & 0.769 & 342.3 \\
+\midrule
+Oracle & 42 & 0.696 & 0.100 & 0.676 & 40.7 \\
+ & 123 & 0.792 & 0.120 & 0.748 & 50.1 \\
+ & 456 & 0.678 & 0.000 & 0.787 & 29.3 \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,7 @@
+Configurazione,Visited (media),Visited (std),Unvisited (media),Unvisited (std),Coverage (media),Coverage (std),Collisioni (media)
+No Belief,0.052,0.008,0.046,0.023,0.664,0.183,17.0
+Bayesian,0.827,0.026,0.087,0.151,0.820,0.050,57.3
+Bayesian + GF,0.488,0.046,0.165,0.031,0.460,0.219,156.7
+LSTM puro,0.662,0.034,0.011,0.010,0.698,0.013,143.4
+LSTM + GF,0.691,0.069,0.164,0.048,0.528,0.240,286.8
+Oracle,0.722,0.061,0.073,0.064,0.737,0.056,40.0
